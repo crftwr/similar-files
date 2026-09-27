@@ -1,0 +1,33 @@
+# similar-files on a NAS.
+#
+#   cp docker/.env.example docker/.env      # then edit it
+#   docker compose -f docker/compose.yaml up --build
+#
+# Media folders are mounted read-only, at the path your computer sees them
+# under (see MEDIA_CLIENT_DIR). The playlists then name paths that XeFM on
+# that computer can open as they are. See doc/DOCKER.md.
+
+services:
+  similar-files:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: similar-files:local
+    # Own the playlists and the cache as your NAS user, not root.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    # The first SIGINT cancels cleanly; give the scan time to write its groups.
+    stop_signal: SIGINT
+    stop_grace_period: 2m
+    environment:
+      METHODS: ${METHODS:-identical image video audio}
+      INTERVAL: ${INTERVAL:-0}
+      NICE: ${NICE:-10}
+      WORKERS: ${WORKERS:-}
+      EXTRA_ARGS: ${EXTRA_ARGS:-}
+    volumes:
+      # Read only: similar-files never changes a scanned file.
+      - ${MEDIA_HOST_DIR:?set MEDIA_HOST_DIR in .env}:${MEDIA_CLIENT_DIR:?set MEDIA_CLIENT_DIR in .env}:ro
+      - ${OUT_HOST_DIR:?set OUT_HOST_DIR in .env}:/out
+      - ${CACHE_HOST_DIR:?set CACHE_HOST_DIR in .env}:/cache
+    command: ["${MEDIA_CLIENT_DIR}"]
+    restart: "no"
