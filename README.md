@@ -63,10 +63,10 @@ Two guarantees:
 
 The command line is a thin wrapper. The scanning, caching and grouping are a
 library that other programs can call, and XeFM is the first program to use
-it. See [doc/LIBRARY.md](doc/LIBRARY.md), and for the formats other programs
-read, [doc/PLAYLIST_FORMAT.md](doc/PLAYLIST_FORMAT.md) and
-[doc/CACHE.md](doc/CACHE.md).
+it. See [doc/LIBRARY.md](https://github.com/crftwr/similar-files/blob/main/doc/LIBRARY.md), and for the formats other programs
+read, [doc/PLAYLIST_FORMAT.md](https://github.com/crftwr/similar-files/blob/main/doc/PLAYLIST_FORMAT.md) and
+[doc/CACHE.md](https://github.com/crftwr/similar-files/blob/main/doc/CACHE.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/crftwr/similar-files/blob/main/LICENSE).
