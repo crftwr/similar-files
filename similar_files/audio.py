@@ -10,10 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import struct
-import subprocess
 from typing import Any, Sequence
 
-from .registry import ExtractionFailed, Extractor, register
+from .registry import ExtractionFailed, Extractor, register, run_program
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +58,7 @@ class AudioExtractor(Extractor):
 
     def extract_file(self, path: str) -> bytes:
         args = ["fpcalc", "-raw", "-json", "-length", str(self.params["length"]), path]
-        try:
-            proc = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=_TIMEOUT)
-        except subprocess.TimeoutExpired as exc:
-            raise ExtractionFailed(f"fpcalc took longer than {_TIMEOUT}s") from exc
-        except OSError as exc:
-            raise ExtractionFailed(f"cannot run fpcalc: {exc}") from exc
+        proc = run_program(args, timeout=_TIMEOUT)
         if proc.returncode != 0:
             msg = proc.stderr.decode("utf-8", "replace").strip().splitlines()
             raise ExtractionFailed(msg[-1] if msg else f"fpcalc exited with {proc.returncode}")

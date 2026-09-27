@@ -2,6 +2,8 @@
 
 import io
 import os
+import sys
+import time
 
 import pytest
 
@@ -13,6 +15,7 @@ from similar_files import (
     extract_features,
     find_similar,
     group_features,
+    run_program,
     walk,
 )
 
@@ -117,6 +120,39 @@ def test_unreadable_content_is_cached_as_a_failure(tmp_path, cache_path):
     write(tmp_path / "bad.num", b"hello")
     fs = extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
     assert fs.result.unreadable == 1 and fs.items == []
+    extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
+    assert NumberExtractor.calls == 1
+
+
+def test_transient_failure_is_not_cached(tmp_path, cache_path):
+    class Flaky(NumberExtractor):
+        def extract(self, stream):
+            type(self).calls += 1
+            raise ExtractionFailed("took too long", transient=True)
+
+    make(tmp_path, a=1)
+    fs = extract_features(walk([tmp_path]), Flaky(), cache=cache_path)
+    assert fs.result.errors == 1 and fs.result.unreadable == 0
+    extract_features(walk([tmp_path]), Flaky(), cache=cache_path)
+    assert Flaky.calls == 2
+
+
+def test_cancel_kills_a_running_program_and_caches_nothing(tmp_path, cache_path):
+    class Slow(NumberExtractor):
+        needs_path = True
+
+        def extract_file(self, path):
+            type(self).calls += 1
+            run_program([sys.executable, "-c", "import time; time.sleep(30)"], timeout=60)
+            return b"never"
+
+    make(tmp_path, a=1)
+    started = time.monotonic()
+    fs = extract_features(walk([tmp_path]), Slow(), cache=cache_path,
+                          cancel=lambda: time.monotonic() - started > 0.5)
+    assert fs.result.cancelled and time.monotonic() - started < 10
+    assert Slow.calls == 1
+    # Same feature key, and nothing was cached: the next scan extracts again.
     extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
     assert NumberExtractor.calls == 1
 

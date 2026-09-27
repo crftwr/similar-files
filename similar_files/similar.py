@@ -21,7 +21,7 @@ from ._parallel import Runner
 from .cache import Cache, CacheReader, NullCache
 from .identical import HASH_ALGORITHM, _CHUNK, _CACHE_BATCH, _open_cache, _same_identity
 from .model import Cancelled, CancelCheck, Group, Member, Progress, ProgressCallback, ScanResult
-from .registry import ExtractionFailed, Extractor, get_extractor
+from .registry import ExtractionFailed, Extractor, _cancel_scope, get_extractor
 from .source import FileItem
 
 logger = logging.getLogger(__name__)
@@ -175,6 +175,8 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
         try:
             data = run()
         except ExtractionFailed as exc:
+            if exc.transient:
+                raise
             logger.warning("%s: %s cannot read it: %s", item.uri, extractor.name, exc)
             data = None
         with memo_lock:
@@ -185,6 +187,11 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
         """``(content_hash, feature or None, newly_extracted)``."""
         if stop.is_set():
             raise Cancelled()
+        # run_program() in the extractor sees ``stop``, and kills its program on cancel.
+        with _cancel_scope(stop):
+            return work_in_scope(item, stop)
+
+    def work_in_scope(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
         if extractor.needs_path:
             return work_on_path(item, stop)
         buf = io.BytesIO()

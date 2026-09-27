@@ -6,26 +6,43 @@ party registers its own with :func:`register`.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
 import json
 import logging
 import os
 import shutil
-from typing import Any, BinaryIO, ClassVar, Optional, Sequence
+import subprocess
+import sys
+import threading
+import time
+from typing import Any, BinaryIO, ClassVar, Iterator, Optional, Sequence
 
 from .cache import FeatureKey
+from .model import Cancelled
 from .source import FileItem
 
 logger = logging.getLogger(__name__)
+
+#: How often a running program is checked for the scan being cancelled.
+_POLL_SECONDS = 0.1
+#: The cancel flag of the scan the current worker thread is extracting for.
+_scope = threading.local()
 
 
 class ExtractionFailed(Exception):
     """The extractor recognizes the file type but cannot read this file (corrupt, truncated…).
 
     The failure is cached, so the file is not tried again until it changes
-    or the extractor's version does.
+    or the extractor's version does. A ``transient`` failure (a timeout, a
+    program that could not be started) says nothing about the file: it is
+    counted as an error and not cached, so the next scan tries again.
     """
+
+    def __init__(self, message: str, *, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
 
 
 class ExtractorUnavailable(Exception):
@@ -129,7 +146,9 @@ class Extractor:
 
         ``path`` is the item's own ``local_path`` when it has one, or a
         temporary copy of a remote item, deleted afterwards. Never write to
-        it. Raise :class:`ExtractionFailed` as for :meth:`extract`.
+        it. Raise :class:`ExtractionFailed` as for :meth:`extract`. Run
+        external programs with :func:`run_program`, so a cancelled scan
+        stops them.
         """
         with open(path, "rb") as f:
             return self.extract(f)
@@ -198,3 +217,59 @@ def get_extractor(name: str, **params: Any) -> Extractor:
     if not cls.is_available():
         raise ExtractorUnavailable(name, cls.install_hint())
     return cls(**params)
+
+
+@contextlib.contextmanager
+def _cancel_scope(stop: threading.Event) -> Iterator[None]:
+    """Let :func:`run_program` on this thread see ``stop``, the scan's cancel flag."""
+    previous = getattr(_scope, "stop", None)
+    _scope.stop = stop
+    try:
+        yield
+    finally:
+        _scope.stop = previous
+
+
+def run_program(args: Sequence[str], *, timeout: float) -> "subprocess.CompletedProcess[bytes]":
+    """Run an external program for an extractor, capturing its output.
+
+    - The program runs in a process group of its own, so a Ctrl-C in the
+      terminal reaches the scan (which cancels cleanly) and not the program
+      (which would fail and be cached as an unreadable file).
+    - If the scan is cancelled while it runs, the program is killed and
+      :class:`~similar_files.model.Cancelled` is raised: nothing is cached.
+    - Running longer than ``timeout`` seconds, or failing to start, raises a
+      transient :class:`ExtractionFailed`, which is not cached either.
+
+    A non-zero exit status is returned, not raised: what it means is the
+    extractor's to decide.
+    """
+    stop: Optional[threading.Event] = getattr(_scope, "stop", None)
+    if stop is not None and stop.is_set():
+        raise Cancelled()
+    if sys.platform == "win32":
+        group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    else:
+        group = {"start_new_session": True}
+    try:
+        proc = subprocess.Popen(
+            args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **group
+        )
+    except OSError as exc:
+        raise ExtractionFailed(f"cannot run {args[0]}: {exc}", transient=True) from exc
+    deadline = time.monotonic() + timeout
+    with proc:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=_POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                if stop is not None and stop.is_set():
+                    proc.kill()
+                    proc.communicate()
+                    raise Cancelled() from None
+                if time.monotonic() >= deadline:
+                    proc.kill()
+                    proc.communicate()
+                    raise ExtractionFailed(f"{args[0]} took longer than {timeout:g}s", transient=True) from None
+    return subprocess.CompletedProcess(list(args), proc.returncode, out, err)

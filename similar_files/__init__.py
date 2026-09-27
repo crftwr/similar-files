@@ -14,6 +14,7 @@ from .registry import (
     extractors,
     get_extractor,
     register,
+    run_program,
 )
 from .similar import FeatureSet, extract_features, find_similar, group_features
 from .source import FileItem, LocalFile, WalkStats, walk
@@ -46,6 +47,7 @@ __all__ = [
     "register",
     "remove_playlists",
     "resolve_cache_path",
+    "run_program",
     "walk",
     "write_playlists",
 ]
