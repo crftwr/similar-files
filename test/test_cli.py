@@ -86,7 +86,7 @@ def test_progress_is_whole_lines_on_a_pipe(tree, capsys):
     out = capsys.readouterr().out
     assert "\r" not in out
     lines = out.splitlines()
-    assert any(line.startswith(("sample:", "hash:")) for line in lines)
+    assert any(line.startswith("sample:") for line in lines)
     assert lines[-1].startswith("1 group(s)")
 
 
@@ -96,6 +96,7 @@ def test_each_file_gets_a_line_and_a_rerun_says_cached(tree, capsys):
     for name in ("a.bin", "b.bin", "c.bin"):  # all 2000 bytes: hashed in full
         assert any(line.startswith("start ") and line.endswith(name) for line in lines)
         assert any(line.startswith("done ") and "/3]" in line and line.endswith(name) for line in lines)
+    assert not any(line.startswith("hash:") for line in lines)  # each "done" line carries the count
     assert run(tree, "--replace") == 0
     lines = capsys.readouterr().out.splitlines()
     assert sorted(os.path.basename(line.split()[-1]) for line in lines if line.startswith("cached ")) == [

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import threading
@@ -105,13 +106,16 @@ class _ProgressLog:
     """Progress for the user, as whole lines on stdout, never rewritten.
 
     One line per file event: found in the cache, started, finished (with
-    the phase's count and the time it took), unreadable or failed. Count
-    lines for a phase come when it starts, when it finishes, and at most
-    every ``interval`` seconds in between. Whole lines suit a terminal, a log
-    file and a program reading a pipe (XeFM's log pane) alike.
+    the phase's count and the time it took), unreadable or failed. Phases
+    without per-file events (sample, group) get count lines instead: when
+    they start, when they finish, and at most every ``interval`` seconds in
+    between. Whole lines suit a terminal, a log file and a program reading a
+    pipe (XeFM's log pane) alike.
     """
 
     _WIDTH = 10  # the longest event name, "unreadable"
+    #: Phases whose files are reported one by one; a "done" line carries the count.
+    _PER_FILE = frozenset({"extract", "hash"})
 
     def __init__(self, enabled: bool, *, interval: float = 5.0):
         self.enabled = enabled
@@ -123,14 +127,24 @@ class _ProgressLog:
         if not self.enabled:
             return
         if p.uri is not None:
-            print(self._file_line(p), flush=True)
+            self._print(self._file_line(p))
+            return
+        if p.phase in self._PER_FILE:
             return
         now = time.monotonic()
         finished = bool(p.total) and p.done >= p.total
         if p.phase != self._phase or finished or now - self._last >= self.interval:
-            print(f"{p.phase}: {p.done}/{p.total}" if p.total else f"{p.phase}: {p.done}", flush=True)
+            self._print(f"{p.phase}: {p.done}/{p.total}" if p.total else f"{p.phase}: {p.done}")
             self._phase = p.phase
             self._last = now
+
+    def _print(self, line: str) -> None:
+        try:
+            print(line, flush=True)
+        except BrokenPipeError:
+            # The reader went away (`| head`). The scan goes on without progress.
+            self.enabled = False
+            _stdout_to_devnull()
 
     def _file_line(self, p: Progress) -> str:
         event = (p.event or "").ljust(self._WIDTH)
@@ -139,6 +153,13 @@ class _ProgressLog:
         count = f"[{p.done}/{p.total}]" if p.total else f"[{p.done}]"
         took = f" {p.seconds:.1f}s" if p.seconds is not None else ""
         return f"{event} {count}{took}  {p.uri}"
+
+
+def _stdout_to_devnull() -> None:
+    """Point stdout at the null device, so later prints and the flush at exit do not fail."""
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, sys.stdout.fileno())
+    os.close(devnull)
 
 
 def _cmd_scan(args: argparse.Namespace) -> int:
@@ -227,7 +248,10 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         logger.warning("cancelled; the groups found so far are written")
     if not args.quiet:
         members = sum(len(g.members) for g in result.groups)
-        print(f"{len(written)} group(s), {members} member(s) → {out}")
+        try:
+            print(f"{len(written)} group(s), {members} member(s) → {out}", flush=True)
+        except BrokenPipeError:
+            _stdout_to_devnull()
     return 130 if result.cancelled else (1 if errors else 0)
 
 
