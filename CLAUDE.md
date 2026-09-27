@@ -57,8 +57,8 @@ What the rows above need, and the first design must not close off:
   records (EXIF, tags) all need to fit. The extractor owns the feature's
   encoding; the cache stores opaque bytes, typed by extractor.
 - **A distance belongs to its extractor.** Hamming, Jaccard, cosine and
-  domain-specific ones all occur. Grouping only needs "distance to the
-  anchor" and "within the threshold".
+  domain-specific ones all occur, each mapped to a 0–1 similarity. Grouping
+  only needs "similarity to the anchor" and "within the threshold".
 - **An item can be a directory**, not only a file. A group of folders is a
   valid playlist line; XeFM shows directories in a list too.
 - **Features can be derived from other features.** A folder's feature is
@@ -86,15 +86,49 @@ a refactor.
   job.
 - Keep the public API small and deliberate. XeFM will depend on it.
 
+### Parallel extraction
+
+Extraction is the slow part, and it runs in parallel. How depends on where the
+work happens:
+
+- **Work done in another process** (ffmpeg, `fpcalc`) or **I/O-bound work**
+  (hashing, remote reads): a **thread pool**. The GIL is released while
+  waiting.
+- **CPU-bound Python work** (decoding and resizing an image in Pillow,
+  computing a hash in numpy): a thread pool first, and measure. Pillow releases
+  the GIL for much of its decoding. Move to a **process pool** only when a
+  measurement shows the GIL is the bottleneck. Processes cost pickling,
+  start-up, and a harder cancel.
+- The number of workers is a parameter with a sensible default, capped by the
+  CPU count. For remote files it is capped separately and lower: a server is
+  not a CPU.
+- **Only one thread writes to the cache.** Workers hand back results, and the
+  thread that owns the connection writes them in batches.
+- **Cancelling** stops handing out new files, and lets running ones finish or
+  abandons them. It never leaves a half-written cache row. Everything already
+  written stays valid, so the next run resumes where this one stopped.
+
 ### A registry of extractors
 
 One pattern covers every layer: **media kind → feature extractor → distance
 function**. Layers 2 and 3 are *entries* in the registry, not code paths.
 
 - An extractor declares a stable `name`, a `version`, the files it handles
-  (by extension or sniffing), and the dependency it needs.
-- Its `version` is part of the cache key. Bump it whenever its output changes,
-  and the old features stop matching.
+  (by extension or sniffing), the dependency it needs, and its
+  **parameters**: anything a caller can set that changes its output, such as
+  a hash size or frames sampled per video.
+- The cache key includes `version` **and a canonical digest of the parameters**.
+  Bump `version` whenever the code's output changes. A different parameter
+  value is a different feature, and does not overwrite the old one, so
+  switching back is free. Parameters that cannot change the output (worker
+  count, logging) stay out of the key.
+- **Similarity is 0–1 wherever a user sees it.** Internally each extractor
+  keeps its own distance: Hamming, Jaccard, cosine, whatever fits. It also
+  maps that distance to a similarity, where `1.0` is identical and `0.0` is
+  unrelated. Thresholds, CLI options, playlist annotations and the library's
+  results all use the similarity. Then `--threshold 0.9` means "very close"
+  whichever extractor is running, and the caller never learns each
+  distance's scale.
 - An extractor whose dependency is missing registers as *unavailable*, with
   the `pip install similar-files[extra]` line that fixes it. It never breaks
   import.
@@ -107,7 +141,7 @@ connected components (union-find) chains unrelated files into one huge group.
 Don't do it.
 
 - A group is `anchor + members`. Each member is within the threshold **of the
-  anchor**, and carries its distance to the anchor.
+  anchor**, and carries its similarity to the anchor.
 - **Discovery mode:** the grouping picks the anchors.
 - **Reference mode:** the user names the anchors (several reference files),
   and the scan searches a separate set of candidates. References are never
@@ -122,6 +156,26 @@ Don't do it.
 Group by size → hash a head-and-tail sample → hash the whole file, only for
 the candidates still left. Process the **largest size buckets first**: the
 groups that free the most space come out first, and results can stream.
+
+### One file, one entry: links
+
+A duplicate report that counts the same data twice tells the user they can
+free space they cannot. The walk settles this before anything is hashed:
+
+- **Hard links** (same device and inode) are one file under several names.
+  They are never reported as duplicates of each other, because deleting one
+  frees nothing. Hash one of them, and don't count the rest again.
+- **Symbolic links are not followed by default.** A link to a file would
+  report the file as its own duplicate, and a link to a directory can loop.
+  An option may follow them. When it does, each target is visited once
+  (tracked by device and inode), and a cycle is detected, not recursed into.
+- Overlapping roots (`~/Pictures` and `~/Pictures/2019` in one scan) visit
+  each file once.
+- On Windows, junctions and other reparse points are treated as symbolic
+  links. Where `st_ino` is unavailable (some network filesystems report 0),
+  skip only the hard-link check, and keep that file in the scan.
+- Remote sources may know nothing of inodes. There, `uri` identity is the
+  best available, and that is accepted.
 
 ### The cache
 
@@ -145,8 +199,9 @@ time.
 - **Features are keyed by content hash, not by path:**
   - `files(uri, size, mtime, content_hash, last_seen)` — when `(uri, size,
     mtime)` still matches, the file is not read again.
-  - `features(content_hash, extractor, extractor_version, data)` — a moved or
-    copied file reuses its features, and duplicates are extracted once.
+  - `features(content_hash, extractor, extractor_version, params_digest,
+    data)` — a moved or copied file reuses its features, and duplicates are
+    extracted once.
 - Hash the file in the same pass that extracts its features, so it is read
   once.
 - Invalidate lazily on a stat mismatch. Garbage-collect by `last_seen` age and a
@@ -171,7 +226,7 @@ time.
 - Name each file after its anchor plus the member count, as in
   `IMG_0012.jpg (3).m3u8`. Sanitize names for every OS, and make collisions
   unique.
-- Distances and other extras go in `#` lines that players ignore. The exact
+- Similarities and other extras go in `#` lines that players ignore. The exact
   syntax is specified in `doc/`, the first time one is written. XeFM skips
   `#` lines in playlists.
 - CSV/JSON output for scripts may come later. The playlist stays the
