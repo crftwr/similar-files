@@ -345,6 +345,14 @@ Don't point a scan at the user's real photo or media folders unless asked. A
 scan can read gigabytes and fill the cache. Test on generated data in a
 temporary directory.
 
+### Media file names in published files
+
+Source code, docs, tests, and every other file published to the GitHub
+repository name only **made-up media files** (`IMG_0012.jpg`,
+`holiday.mp4`) or the test media files this repository itself contains.
+Never copy a real file or folder name from the user's machine, such as one
+seen in a scan's output or the cache.
+
 ---
 
 ## Coding standards
