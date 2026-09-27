@@ -326,8 +326,10 @@ python -m similar_files --help
 
 - Use `--no-pager` for any git command that may page output: `diff`, `log`,
   `show`, `branch`, `tag`, `blame`, `grep`.
-- Commit and push only when the user asks. Work on a branch and open a PR;
-  don't commit to `main`.
+- Commit and push only when the user asks.
+- **Before version 1.0**, commit directly to `main`; no branch or PR.
+  **From 1.0 on**, work on a branch and open a PR; don't commit to `main`.
+  The version is `__version__` in `similar_files/__init__.py`.
 
 ### Scans on real folders
 
