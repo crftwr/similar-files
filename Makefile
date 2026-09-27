@@ -3,6 +3,10 @@
 #   make dev       set up .venv with the package, extras and build tools
 #   make test      run the full test suite
 #   make dist      build the sdist and wheel into dist/
+#   make scan ROOT=~/Movies METHOD=video
+#                  scan one folder with the CLI (see "Scan" below)
+#   make cache-dump ARGS="--extractor video --unreadable"
+#                  list what the cache has recorded (tools/dump_cache.py -h)
 #
 # `make help` lists every target.
 
@@ -42,6 +46,30 @@ test-core:  ## Run the tests on a bare install (no optional extras), in a temp v
 	python3 -m venv temp/venv-core
 	temp/venv-core/bin/python -m pip install --quiet ".[test]"
 	cd temp && venv-core/bin/python -m pytest ../test/ -v
+
+# --- Scan ----------------------------------------------------------------
+#
+#   ROOT    the folder (or file) to scan; required, spaces allowed
+#   METHOD  identical (default), image, video or audio
+#   OUT     where the playlists go (default temp/scan/METHOD); replaced each run
+#   ARGS    more options for `similar-files scan`, e.g.
+#           ARGS="--remote-root /Volumes/NAS --include-remote -t 0.8"
+#
+# Ctrl-C once cancels cleanly: the groups found so far are still written.
+
+METHOD ?= identical
+OUT    ?= temp/scan/$(METHOD)
+
+.PHONY: scan
+scan:  ## Scan ROOT for METHOD (identical/image/video/audio) into OUT
+	@test -n "$(ROOT)" || { echo 'usage: make scan ROOT=<folder> [METHOD=identical|image|video|audio] [OUT=<dir>] [ARGS="..."]' >&2; exit 2; }
+	@# zsh leaves the ~ in ROOT=~/Movies as it is; expand it here.
+	root='$(ROOT)'; case "$$root" in "~"*) root="$$HOME$${root#\~}";; esac; \
+	$(PYTHON) -m similar_files scan -m $(METHOD) -o "$(OUT)" --replace $(ARGS) "$$root"
+
+.PHONY: cache-dump
+cache-dump:  ## Dump the cache's files and features (ARGS="--extractor video --unreadable")
+	$(PYTHON) tools/dump_cache.py $(ARGS)
 
 # --- Distribution --------------------------------------------------------
 
