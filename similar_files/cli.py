@@ -101,44 +101,44 @@ def _add_verbosity(p: argparse.ArgumentParser) -> None:
     p.add_argument("-v", "--verbose", action="store_true", help="more detail")
 
 
-class _ProgressLine:
-    """Progress for the user.
+class _ProgressLog:
+    """Progress for the user, as whole lines on stdout, never rewritten.
 
-    On a terminal: a single self-overwriting status line on stderr. Otherwise
-    (a pipe, as when XeFM or another program runs the CLI and shows its
-    output line by line): whole lines on stdout, one when a phase starts, one
-    when it finishes, and at most one every ``interval`` seconds in between.
+    One line per file event: found in the cache, started, finished (with
+    the phase's count and the time it took), unreadable or failed. Count
+    lines for a phase come when it starts, when it finishes, and at most
+    every ``interval`` seconds in between. Whole lines suit a terminal, a log
+    file and a program reading a pipe (XeFM's log pane) alike.
     """
 
-    def __init__(self, enabled: bool, *, interval: float = 2.0):
+    _WIDTH = 10  # the longest event name, "unreadable"
+
+    def __init__(self, enabled: bool, *, interval: float = 5.0):
         self.enabled = enabled
-        self.tty = sys.stderr.isatty()
         self.interval = interval
-        self._width = 0
         self._phase: Optional[str] = None
         self._last = 0.0
 
     def __call__(self, p: Progress) -> None:
         if not self.enabled:
             return
-        text = f"{p.phase}: {p.done}/{p.total}" if p.total else f"{p.phase}: {p.done}"
-        if not self.tty:
-            now = time.monotonic()
-            finished = bool(p.total) and p.done >= p.total
-            if p.phase != self._phase or finished or now - self._last >= self.interval:
-                print(text, flush=True)
-                self._phase = p.phase
-                self._last = now
+        if p.uri is not None:
+            print(self._file_line(p), flush=True)
             return
-        sys.stderr.write("\r" + text.ljust(self._width))
-        sys.stderr.flush()
-        self._width = len(text)
+        now = time.monotonic()
+        finished = bool(p.total) and p.done >= p.total
+        if p.phase != self._phase or finished or now - self._last >= self.interval:
+            print(f"{p.phase}: {p.done}/{p.total}" if p.total else f"{p.phase}: {p.done}", flush=True)
+            self._phase = p.phase
+            self._last = now
 
-    def clear(self) -> None:
-        if self.enabled and self.tty and self._width:
-            sys.stderr.write("\r" + " " * self._width + "\r")
-            sys.stderr.flush()
-            self._width = 0
+    def _file_line(self, p: Progress) -> str:
+        event = (p.event or "").ljust(self._WIDTH)
+        if p.event in ("cached", "start"):
+            return f"{event} {p.uri}"
+        count = f"[{p.done}/{p.total}]" if p.total else f"[{p.done}]"
+        took = f" {p.seconds:.1f}s" if p.seconds is not None else ""
+        return f"{event} {count}{took}  {p.uri}"
 
 
 def _cmd_scan(args: argparse.Namespace) -> int:
@@ -179,7 +179,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGINT, signal.default_int_handler)
 
     previous = signal.signal(signal.SIGINT, on_sigint)
-    progress = _ProgressLine(not args.quiet)
+    progress = _ProgressLog(not args.quiet)
     stats = WalkStats()
     items = walk(
         args.roots,
@@ -206,7 +206,6 @@ def _cmd_scan(args: argparse.Namespace) -> int:
                 threshold=args.threshold, include_remote=args.include_remote, **common,
             )
     finally:
-        progress.clear()
         signal.signal(signal.SIGINT, previous)
         if cache is not False:
             cache.close()

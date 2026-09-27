@@ -44,14 +44,29 @@ class Group:
 class Progress:
     """A progress report, delivered on the thread that runs the scan.
 
-    ``phase`` is one of ``"sample"`` (hashing a head-and-tail sample),
-    ``"hash"`` (hashing whole files), ``"extract"`` (reading features) and
-    ``"group"``. ``total`` may be 0 when it is not known.
+    ``phase`` is one of ``"cache"`` (looking files up in the cache),
+    ``"sample"`` (hashing a head-and-tail sample), ``"hash"`` (hashing whole
+    files), ``"extract"`` (reading features) and ``"group"``. ``total`` may
+    be 0 when it is not known.
+
+    A report about one file sets ``uri`` and ``event``:
+
+    - ``"cached"``: found in the cache, so not read (phase ``"cache"``);
+    - ``"start"``: a worker started on it;
+    - ``"done"``: finished, in ``seconds``;
+    - ``"unreadable"``: the extractor cannot read it, found in ``seconds``;
+    - ``"failed"``: it could not be read (the error is logged).
+
+    ``done`` and ``total`` are then the phase's counts at that moment.
+    Reports without ``uri`` are counts only.
     """
 
     phase: str
     done: int
     total: int
+    uri: Optional[str] = None
+    event: Optional[str] = None
+    seconds: Optional[float] = None
 
 
 ProgressCallback = Callable[[Progress], None]

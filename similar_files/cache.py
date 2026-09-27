@@ -3,9 +3,9 @@
 It is a cache, not state. Deleting it loses nothing but time. The schema is
 a contract other programs may read; it is documented in ``doc/CACHE.md``.
 
-Threading: a :class:`Cache` has one *writer*, the thread that runs a scan.
-Worker threads read through connections of their own (:meth:`Cache.reader`),
-which WAL mode allows while the writer writes.
+Threading: a :class:`Cache` is used by one thread, the one that runs a
+scan. It looks up every file before handing work out, and writes the
+results the workers hand back. Worker threads never touch it.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DB_FILENAME = "cache.sqlite3"
 ENV_VAR = "SIMILAR_FILES_CACHE"
 _BUSY_TIMEOUT_MS = 30_000
@@ -37,13 +37,16 @@ CREATE TABLE IF NOT EXISTS files (
     last_seen    INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS features (
-    content_hash      TEXT NOT NULL,
+    uri               BLOB NOT NULL,
+    size              INTEGER NOT NULL,
+    mtime_ns          INTEGER NOT NULL,
+    validator         TEXT,
     extractor         TEXT NOT NULL,
     extractor_version INTEGER NOT NULL,
     params_digest     TEXT NOT NULL,
     data              BLOB,
     last_seen         INTEGER NOT NULL,
-    PRIMARY KEY (content_hash, extractor, extractor_version, params_digest)
+    PRIMARY KEY (uri, extractor, extractor_version, params_digest)
 );
 CREATE INDEX IF NOT EXISTS files_last_seen ON files (last_seen);
 CREATE INDEX IF NOT EXISTS features_last_seen ON features (last_seen);
@@ -113,30 +116,6 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _read_feature(conn: sqlite3.Connection, content_hash: str, key: FeatureKey) -> tuple[bool, Optional[bytes]]:
-    row = conn.execute(
-        "SELECT data FROM features WHERE content_hash=? AND extractor=? AND extractor_version=? AND params_digest=?",
-        (content_hash, key.extractor, key.version, key.params_digest),
-    ).fetchone()
-    if row is None:
-        return False, None
-    return True, row[0]
-
-
-class CacheReader:
-    """A read-only view for a worker thread. Create one per thread."""
-
-    def __init__(self, path: Path):
-        self._conn = _connect(path)
-
-    def feature(self, content_hash: str, key: FeatureKey) -> tuple[bool, Optional[bytes]]:
-        """``(found, data)``. ``data`` is ``None`` when the extractor could not read the file."""
-        return _read_feature(self._conn, content_hash, key)
-
-    def close(self) -> None:
-        self._conn.close()
-
-
 class Cache:
     """The feature cache.
 
@@ -203,7 +182,11 @@ class Cache:
             # Re-check under the write lock: another process may have just done this.
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             if version != SCHEMA_VERSION:
-                if version != 0:
+                if version == 1:
+                    # Features were keyed by content hash; ``files`` is unchanged.
+                    logger.info("cache %s: schema 1 features dropped for schema %d", self.path, SCHEMA_VERSION)
+                    self._conn.execute("DROP TABLE IF EXISTS features")
+                elif version != 0:
                     # Older schema. It is only a cache: start over.
                     logger.info("cache %s: schema %d replaced by %d", self.path, version, SCHEMA_VERSION)
                     self._conn.execute("DROP TABLE IF EXISTS files")
@@ -231,14 +214,20 @@ class Cache:
             return None
         return row[3]
 
-    def feature(self, content_hash: str, key: FeatureKey) -> tuple[bool, Optional[bytes]]:
-        """``(found, data)``. ``data`` is ``None`` when the extractor could not read the file."""
+    def feature(
+        self, uri: str, size: int, mtime_ns: int, validator: Optional[str], key: FeatureKey
+    ) -> tuple[bool, Optional[bytes]]:
+        """``(found, data)`` for a file, if its stat still matches. ``data`` is ``None`` when the
+        extractor could not read the file."""
         with self._lock:
-            return _read_feature(self._conn, content_hash, key)
-
-    def reader(self) -> "CacheReader":
-        """A new read connection for a worker thread. The caller closes it."""
-        return CacheReader(self.path)
+            row = self._conn.execute(
+                "SELECT size, mtime_ns, validator, data FROM features "
+                "WHERE uri=? AND extractor=? AND extractor_version=? AND params_digest=?",
+                (_uri_key(uri), key.extractor, key.version, key.params_digest),
+            ).fetchone()
+        if row is None or row[0] != size or row[1] != mtime_ns or row[2] != validator:
+            return False, None
+        return True, row[3]
 
     # -- writing (one thread) ---------------------------------------------
 
@@ -253,23 +242,30 @@ class Cache:
                 data,
             )
 
-    def put_features(self, rows: Iterable[tuple[str, FeatureKey, Optional[bytes]]]) -> None:
-        """Store ``(content_hash, key, data)`` rows in one transaction. ``data=None`` records a failure."""
+    def put_features(
+        self, rows: Iterable[tuple[str, int, int, Optional[str], FeatureKey, Optional[bytes]]]
+    ) -> None:
+        """Store ``(uri, size, mtime_ns, validator, key, data)`` rows in one transaction.
+
+        ``data=None`` records a failure. A row replaces the one for the same
+        URI and key, whatever the file's stat was then.
+        """
         now = int(time.time())
-        data = [(h, k.extractor, k.version, k.params_digest, d, now) for h, k, d in rows]
+        data = [(_uri_key(u), s, m, v, k.extractor, k.version, k.params_digest, d, now) for u, s, m, v, k, d in rows]
         if data:
             self._write(
                 "INSERT OR REPLACE INTO features "
-                "(content_hash, extractor, extractor_version, params_digest, data, last_seen) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(uri, size, mtime_ns, validator, extractor, extractor_version, params_digest, data, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 data,
             )
 
     def touch(self, uris: Iterable[str] = (), features: Iterable[tuple[str, FeatureKey]] = ()) -> None:
-        """Mark rows as seen now, so garbage collection keeps them."""
+        """Mark rows as seen now, so garbage collection keeps them: ``files`` rows by URI,
+        ``features`` rows by ``(uri, key)``."""
         now = int(time.time())
         file_rows = [(now, _uri_key(u)) for u in uris]
-        feature_rows = [(now, h, k.extractor, k.version, k.params_digest) for h, k in features]
+        feature_rows = [(now, _uri_key(u), k.extractor, k.version, k.params_digest) for u, k in features]
         with self._lock:
             self._begin()
             try:
@@ -277,7 +273,7 @@ class Cache:
                     self._conn.executemany("UPDATE files SET last_seen=? WHERE uri=?", file_rows)
                 if feature_rows:
                     self._conn.executemany(
-                        "UPDATE features SET last_seen=? WHERE content_hash=? AND extractor=? "
+                        "UPDATE features SET last_seen=? WHERE uri=? AND extractor=? "
                         "AND extractor_version=? AND params_digest=?",
                         feature_rows,
                     )
@@ -370,11 +366,8 @@ class NullCache:
     def content_hash(self, uri, size, mtime_ns, validator=None):
         return None
 
-    def feature(self, content_hash, key):
+    def feature(self, uri, size, mtime_ns, validator, key):
         return False, None
-
-    def reader(self):
-        return self
 
     def put_hashes(self, rows):
         pass

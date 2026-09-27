@@ -216,6 +216,9 @@ On one 10-minute 1920×1080 file (1.1 GB, 2 s GOP), version 2 takes 1.5 s.
 Version 1 took 0.65 s there: with a short GOP, its 10 seeks were cheap.
 Version 2 reads the whole file, so on a long video **the file's size, not
 its decoding, sets the time**. On a network mount that is the transfer.
+ffmpeg is the only reader: features are cached by file (URI, size, mtime),
+not by a content hash, which would take a second full read. On a gigabit SMB
+share that read runs at about 90 MB/s.
 One run may take up to 600 s before it counts as a transient failure.
 
 **Comparison**, pure Python (synthetic features, 300 keyframes each):
@@ -232,6 +235,20 @@ were left out.
 Discovery costs O(N²) in the number of videos, through the index. For more
 than a few thousand long videos, an index over whole videos, or numpy, is
 the next step. Add either only when a real case needs it.
+
+## First look at real videos
+
+26 feature-length videos (27–134 min, H.264 from several studios) on an SMB
+share, 2026-09-27:
+
+- One keyframe every 4–10 s (0.10–0.24 a second), so 300–1,450 frames and
+  4–17 KB a video. `interval` never applied.
+- No pair reached the threshold. None was a copy of another, so this shows
+  no false groups, not that copies are found.
+- The highest scores, 0.06–0.10, were real: videos from one studio open with
+  the same sequence, which matched in their first minute.
+- One false match scored 0.08: 2–3 dark, simple frames near one video's end,
+  at 7–10 bits, just inside the match distance.
 
 ## Known limits
 

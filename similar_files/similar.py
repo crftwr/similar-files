@@ -8,18 +8,18 @@ re-extracting.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import logging
 import os
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ._parallel import Runner
-from .cache import Cache, CacheReader, NullCache
-from .identical import HASH_ALGORITHM, _CHUNK, _CACHE_BATCH, _open_cache, _same_identity
+from .cache import Cache, NullCache
+from .identical import _CHUNK, _CACHE_BATCH, _CACHE_SECONDS, _open_cache, _same_identity
 from .model import Cancelled, CancelCheck, Group, Member, Progress, ProgressCallback, ScanResult
 from .registry import ExtractionFailed, Extractor, _cancel_scope, get_extractor
 from .source import FileItem
@@ -38,31 +38,6 @@ class FeatureSet:
     reference_features: list[bytes] = field(default_factory=list)
     #: Errors, skipped remote files and cancellation, carried into the scan result.
     result: ScanResult = field(default_factory=ScanResult)
-
-
-class _Readers:
-    """One cache read connection per worker thread, closed when the scan ends."""
-
-    def __init__(self, cache):
-        self._cache = cache
-        self._local = threading.local()
-        self._all: list[CacheReader] = []
-        self._lock = threading.Lock()
-
-    def get(self):
-        reader = getattr(self._local, "reader", None)
-        if reader is None:
-            reader = self._cache.reader()
-            self._local.reader = reader
-            with self._lock:
-                self._all.append(reader)
-        return reader
-
-    def close(self) -> None:
-        with self._lock:
-            for reader in self._all:
-                reader.close()
-            self._all.clear()
 
 
 def extract_features(
@@ -127,32 +102,26 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
         logger.warning("skipped %d remote file(s); extracting them means downloading them", result.skipped_remote)
 
     found: dict[int, bytes] = {}  # index in todo -> feature
-    touched_uris: list[str] = []
-    touched_features: list[tuple[str, Any]] = []
+    touched: list[tuple[str, Any]] = []
     misses: list[int] = []
 
-    # Cache hits need no reading at all.
+    # Features are keyed by the file (URI, size, mtime, validator), not by
+    # its content: a cache hit needs no reading at all, and a miss is read
+    # once, by the extractor.
     for i, (item, _) in enumerate(todo):
-        h = cache.content_hash(item.uri, item.size, item.mtime_ns, item.validator)
-        if h is not None:
-            hit, data = cache.feature(h, key)
-            if hit:
-                touched_uris.append(item.uri)
-                touched_features.append((h, key))
-                if data is None:
-                    result.unreadable += 1
-                else:
-                    found[i] = data
-                continue
-        misses.append(i)
+        hit, data = cache.feature(item.uri, item.size, item.mtime_ns, item.validator, key)
+        if not hit:
+            misses.append(i)
+            continue
+        if progress is not None:
+            progress(Progress("cache", i + 1, len(todo), item.uri, "cached"))
+        touched.append((item.uri, key))
+        if data is None:
+            result.unreadable += 1
+        else:
+            found[i] = data
 
-    readers = _Readers(cache)
-    memo: dict[str, Optional[bytes]] = {}
-    memo_lock = threading.Lock()
-
-    def read(item: FileItem, stop: threading.Event, sink) -> str:
-        """Read ``item`` once, feeding ``sink`` every chunk; return its content hash."""
-        h = hashlib.sha256()
+    def download(item: FileItem, stop: threading.Event, out) -> None:
         with item.open() as f:
             while True:
                 if stop.is_set():
@@ -160,116 +129,96 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
                 chunk = f.read(_CHUNK)
                 if not chunk:
                     break
-                h.update(chunk)
-                if sink is not None:
-                    sink(chunk)
-        return f"{HASH_ALGORITHM}:{h.hexdigest()}"
+                out.write(chunk)
 
-    def known(content_hash: str) -> tuple[bool, Optional[bytes]]:
-        with memo_lock:
-            if content_hash in memo:
-                return True, memo[content_hash]
-        return readers.get().feature(content_hash, key)
-
-    def extracted(item: FileItem, content_hash: str, run) -> tuple[str, Optional[bytes], bool]:
-        try:
-            data = run()
-        except ExtractionFailed as exc:
-            if exc.transient:
-                raise
-            logger.warning("%s: %s cannot read it: %s", item.uri, extractor.name, exc)
-            data = None
-        with memo_lock:
-            memo[content_hash] = data
-        return content_hash, data, True
-
-    def work(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
-        """``(content_hash, feature or None, newly_extracted)``."""
+    def work(item: FileItem, stop: threading.Event, note) -> Optional[bytes]:
+        """The feature, or ``None`` if the extractor cannot read the file."""
         if stop.is_set():
             raise Cancelled()
-        # run_program() in the extractor sees ``stop``, and kills its program on cancel.
-        with _cancel_scope(stop):
-            return work_in_scope(item, stop)
+        note("start", item.uri)
+        started = time.monotonic()
+        try:
+            # run_program() in the extractor sees ``stop``, and kills its program on cancel.
+            with _cancel_scope(stop):
+                data = extract(item, stop)
+            note("done", item.uri, time.monotonic() - started)
+            return data
+        except ExtractionFailed as exc:
+            if exc.transient:
+                note("failed", item.uri)
+                raise
+            logger.warning("%s: %s cannot read it: %s", item.uri, extractor.name, exc)
+            note("unreadable", item.uri, time.monotonic() - started)
+            return None
+        except Cancelled:
+            raise
+        except Exception:
+            note("failed", item.uri)
+            raise
 
-    def work_in_scope(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
-        if extractor.needs_path:
-            return work_on_path(item, stop)
-        buf = io.BytesIO()
-        content_hash = read(item, stop, buf.write)
-        hit, data = known(content_hash)
-        if hit:
-            return content_hash, data, False
-        buf.seek(0)
-        return extracted(item, content_hash, lambda: extractor.extract(buf))
-
-    def work_on_path(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
-        # The tool that extracts (ffmpeg, fpcalc) opens a file by name, and a
-        # container such as MP4 needs to seek, so it cannot read a pipe.
+    def extract(item: FileItem, stop: threading.Event) -> bytes:
         local = getattr(item, "local_path", None)
         if local:
-            # Read twice: once here for the content hash, once by the tool.
-            # The hash comes first so a cached feature skips the tool entirely.
-            content_hash = read(item, stop, None)
-            hit, data = known(content_hash)
-            if hit:
-                return content_hash, data, False
-            return extracted(item, content_hash, lambda: extractor.extract_file(local))
-        # Remote: download once into a temporary file, hashing on the way.
+            if extractor.needs_path:
+                return extractor.extract_file(local)
+            with open(local, "rb") as f:
+                return extractor.extract(f)
+        if not extractor.needs_path:
+            buf = io.BytesIO()
+            download(item, stop, buf)
+            buf.seek(0)
+            return extractor.extract(buf)
+        # The tool that extracts (ffmpeg, fpcalc) opens a file by name, and a
+        # container such as MP4 needs to seek, so it cannot read a pipe.
+        # Remote: download once into a temporary file.
         suffix = os.path.splitext(item.uri.rsplit("/", 1)[-1])[1][:16]
         fd, tmp = tempfile.mkstemp(prefix="similar-files-", suffix=suffix)
         try:
             with os.fdopen(fd, "wb") as out:
-                content_hash = read(item, stop, out.write)
-            hit, data = known(content_hash)
-            if hit:
-                return content_hash, data, False
-            return extracted(item, content_hash, lambda: extractor.extract_file(tmp))
+                download(item, stop, out)
+            return extractor.extract_file(tmp)
         finally:
             try:
                 os.unlink(tmp)
             except OSError:
                 pass
 
-    new_hashes: list[tuple] = []
     new_features: list[tuple] = []
+    last_flush = time.monotonic()
 
     def flush(force: bool = False) -> None:
-        if force or len(new_hashes) >= _CACHE_BATCH:
-            cache.put_hashes(new_hashes)
+        nonlocal last_flush
+        if new_features and (force or len(new_features) >= _CACHE_BATCH or time.monotonic() - last_flush >= _CACHE_SECONDS):
             cache.put_features(new_features)
-            new_hashes.clear()
             new_features.clear()
+            last_flush = time.monotonic()
 
-    try:
-        with Runner(workers=workers, remote_workers=remote_workers, progress=progress, cancel=cancel) as runner:
-            futures = [(i, runner.submit(todo[i][0].is_remote, work, todo[i][0], runner.stop)) for i in misses]
-            runner.start_phase("extract", len(futures))
-            for i, future in futures:
-                if not runner.wait([future]):
-                    result.cancelled = True
-                    break
-                item = todo[i][0]
-                try:
-                    content_hash, data, new = future.result()
-                except Exception as exc:  # noqa: BLE001 - one unreadable file never aborts a scan
-                    logger.warning("cannot read %s: %s", item.uri, exc)
-                    result.add_error(item.uri)
-                    continue
-                new_hashes.append((item.uri, item.size, item.mtime_ns, item.validator, content_hash))
-                if new:
-                    new_features.append((content_hash, key, data))
-                else:
-                    touched_features.append((content_hash, key))
-                if data is None:
-                    result.unreadable += 1
-                else:
-                    found[i] = data
-                flush()
-            # Everything finished so far is valid, cancelled or not.
-            flush(force=True)
-            cache.touch(uris=touched_uris, features=touched_features)
-    finally:
-        readers.close()
+    with Runner(workers=workers, remote_workers=remote_workers, progress=progress, cancel=cancel) as runner:
+        runner.start_phase("extract", len(misses))
+        futures = {runner.submit(todo[i][0].is_remote, work, todo[i][0], runner.stop, runner.note): i for i in misses}
+        # In the order they finish: a long file does not hold back the ones
+        # behind it, and a cancelled scan still keeps every finished file.
+        for future in runner.as_completed(futures):
+            i = futures[future]
+            item = todo[i][0]
+            try:
+                data = future.result()
+            except Cancelled:
+                continue
+            except Exception as exc:  # noqa: BLE001 - one unreadable file never aborts a scan
+                logger.warning("cannot read %s: %s", item.uri, exc)
+                result.add_error(item.uri)
+                continue
+            new_features.append((item.uri, item.size, item.mtime_ns, item.validator, key, data))
+            if data is None:
+                result.unreadable += 1
+            else:
+                found[i] = data
+            flush()
+        result.cancelled = runner.stop.is_set()
+        # Everything finished so far is valid, cancelled or not.
+        flush(force=True)
+        cache.touch(features=touched)
 
     for i, (item, is_ref) in enumerate(todo):
         data = found.get(i)

@@ -10,13 +10,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, Iterable, Optional, Sequence
 
 from ._parallel import Runner
 from .cache import Cache, NullCache
-from .model import Cancelled, CancelCheck, Group, Member, ProgressCallback, ScanResult
+from .model import Cancelled, CancelCheck, Group, Member, Progress, ProgressCallback, ScanResult
 from .source import FileItem
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,11 @@ HASH_ALGORITHM = "sha256"
 #: Bytes read from each end of a file for the sample hash.
 SAMPLE_BYTES = 64 * 1024
 _CHUNK = 1024 * 1024
+#: Results are written to the cache every this many files, or every
+#: _CACHE_SECONDS, whichever comes first: a slow scan (large files on a
+#: network share) then shows its progress in the cache, and a crash loses little.
 _CACHE_BATCH = 256
+_CACHE_SECONDS = 30.0
 
 
 def hash_stream(stream, stop=None) -> str:
@@ -158,19 +163,28 @@ def _find_identical(items, references, cache, min_size, workers, remote_workers,
 
     # -- 2. Cached hashes: no reading at all -------------------------------
     touched: list[str] = []
+    total = sum(len(b) for b in buckets)
+    n = 0
     for bucket in buckets:
         for e in bucket:
+            n += 1
             h = cache.content_hash(e.item.uri, e.item.size, e.item.mtime_ns, e.item.validator)
             if h is not None:
                 e.sha, e.from_cache = h, True
                 touched.append(e.item.uri)
+                if progress is not None:
+                    progress(Progress("cache", n, total, e.item.uri, "cached"))
 
     new_hashes: list[tuple] = []
 
+    last_flush = time.monotonic()
+
     def flush(force: bool = False) -> None:
-        if new_hashes and (force or len(new_hashes) >= _CACHE_BATCH):
+        nonlocal last_flush
+        if new_hashes and (force or len(new_hashes) >= _CACHE_BATCH or time.monotonic() - last_flush >= _CACHE_SECONDS):
             cache.put_hashes(new_hashes)
             new_hashes.clear()
+            last_flush = time.monotonic()
 
     def fail(e: _Entry, exc: BaseException) -> None:
         e.failed = True
@@ -236,15 +250,31 @@ def _find_identical(items, references, cache, min_size, workers, remote_workers,
         def full_hash(e: _Entry) -> str:
             if runner.stop.is_set():
                 raise Cancelled()
-            with e.item.open() as f:
-                return hash_stream(f, runner.stop)
+            runner.note("start", e.item.uri)
+            started = time.monotonic()
+            try:
+                with e.item.open() as f:
+                    sha = hash_stream(f, runner.stop)
+            except Cancelled:
+                raise
+            except Exception:
+                runner.note("failed", e.item.uri)
+                raise
+            runner.note("done", e.item.uri, time.monotonic() - started)
+            return sha
 
+        runner.start_phase("hash", len(to_hash))
         futures = {id(e): runner.submit(e.item.is_remote, full_hash, e) for e in to_hash}
-        runner.start_phase("hash", len(futures))
         for bucket, mode in plans:
             pending = [futures[id(e)] for e in bucket if id(e) in futures]
             if not runner.wait(pending):
                 result.cancelled = True
+                # Keep every hash finished by now, in this bucket or a later one.
+                for e in to_hash:
+                    f = futures[id(e)]
+                    if e.sha is None and f.done() and not f.cancelled() and f.exception() is None:
+                        e.sha = f.result()
+                        new_hashes.append((e.item.uri, e.item.size, e.item.mtime_ns, e.item.validator, e.sha))
                 break
             for e in bucket:
                 f = futures.get(id(e))

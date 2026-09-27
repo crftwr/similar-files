@@ -53,30 +53,56 @@ def test_undecodable_filenames_are_stored_exactly(cache_path):
         assert c.content_hash(uri, 1, 1) == "sha256:y"
 
 
-def test_features_by_content_hash_and_key(cache_path):
+def test_features_by_file_stat_and_key(cache_path):
     with Cache(cache_path) as c:
-        c.put_features([("sha256:x", KEY, b"\x01"), ("sha256:bad", KEY, None)])
-        assert c.feature("sha256:x", KEY) == (True, b"\x01")
-        assert c.feature("sha256:bad", KEY) == (True, None)
-        assert c.feature("sha256:x", FeatureKey("fake", 2, "d1")) == (False, None)
-        assert c.feature("sha256:x", FeatureKey("fake", 1, "d2")) == (False, None)
-        r = c.reader()
-        assert r.feature("sha256:x", KEY) == (True, b"\x01")
-        r.close()
+        c.put_features([("/x", 10, 100, None, KEY, b"\x01"), ("/bad", 1, 1, "e1", KEY, None)])
+        assert c.feature("/x", 10, 100, None, KEY) == (True, b"\x01")
+        assert c.feature("/bad", 1, 1, "e1", KEY) == (True, None)
+        # Another stat, another version or other parameters: not found.
+        assert c.feature("/x", 11, 100, None, KEY) == (False, None)
+        assert c.feature("/x", 10, 101, None, KEY) == (False, None)
+        assert c.feature("/bad", 1, 1, "e2", KEY) == (False, None)
+        assert c.feature("/x", 10, 100, None, FeatureKey("fake", 2, "d1")) == (False, None)
+        assert c.feature("/x", 10, 100, None, FeatureKey("fake", 1, "d2")) == (False, None)
+        # A changed file's new feature replaces the old row.
+        c.put_features([("/x", 11, 100, None, KEY, b"\x02")])
+        assert c.feature("/x", 11, 100, None, KEY) == (True, b"\x02")
+        assert c.stats()["features"] == 2
 
 
 def test_gc_by_age_and_size(cache_path):
     with Cache(cache_path) as c:
         c.put_hashes([("/old", 1, 1, None, "sha256:o"), ("/new", 1, 1, None, "sha256:n")])
-        c.put_features([(f"sha256:{i}", KEY, b"x" * 1000) for i in range(10)])
+        c.put_features([(f"/{i}", 1, 1, None, KEY, b"x" * 1000) for i in range(10)])
         old = int(time.time()) - 100 * 86400
         c._conn.execute("UPDATE files SET last_seen=? WHERE uri=?", (old, b"/old"))
-        c._conn.execute("UPDATE features SET last_seen=? WHERE content_hash='sha256:0'", (old,))
+        c._conn.execute("UPDATE features SET last_seen=? WHERE uri=?", (old, b"/0"))
         r = c.gc(max_age_days=30)
         assert (r.files_removed, r.features_removed) == (1, 1)
         assert c.content_hash("/new", 1, 1) == "sha256:n"
         r = c.gc(max_bytes=5000)
         assert c.stats()["features"] <= 4
+
+
+def test_schema_1_keeps_its_hashes_and_drops_its_features(cache_path):
+    cache_path.parent.mkdir(parents=True)
+    conn = sqlite3.connect(cache_path)
+    conn.executescript("""
+        CREATE TABLE files (uri BLOB PRIMARY KEY, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
+                            validator TEXT, content_hash TEXT NOT NULL, last_seen INTEGER NOT NULL);
+        CREATE TABLE features (content_hash TEXT NOT NULL, extractor TEXT NOT NULL,
+                               extractor_version INTEGER NOT NULL, params_digest TEXT NOT NULL, data BLOB,
+                               last_seen INTEGER NOT NULL);
+        INSERT INTO files VALUES (X'2F61', 10, 100, NULL, 'sha256:x', 0);
+        INSERT INTO features VALUES ('sha256:x', 'fake', 1, 'd1', X'01', 0);
+        PRAGMA user_version = 1;
+    """)
+    conn.close()
+    with Cache(cache_path) as c:
+        assert c.content_hash("/a", 10, 100) == "sha256:x"
+        assert c.stats()["features"] == 0
+        c.put_features([("/a", 10, 100, None, KEY, b"\x01")])
+        assert c.feature("/a", 10, 100, None, KEY) == (True, b"\x01")
 
 
 def test_newer_schema_is_refused(cache_path):

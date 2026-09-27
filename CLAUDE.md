@@ -203,24 +203,27 @@ time.
   - Under MSIX, XeFM's `%LOCALAPPDATA%` is virtualized, so the Store build gets
     a cache of its own. That is acceptable, because it is only a cache.
   - The location is decided in one function, so the rule is written once.
-- **Features are keyed by content hash, not by path:**
-  - `files(uri, size, mtime, content_hash, last_seen)` — when `(uri, size,
-    mtime)` still matches, the file is not read again.
-  - `features(content_hash, extractor, extractor_version, params_digest,
-    data)` — a moved or copied file reuses its features, and duplicates are
-    extracted once.
-- Hash the file in the same pass that extracts its features, so it is read
-  once.
+- **Features are keyed by the file, not by its content.** Speed comes first:
+  - `features(uri, size, mtime, validator, extractor, extractor_version,
+    params_digest, data)` — while `(uri, size, mtime, validator)` still
+    matches, the feature is used as it is. A miss is read once, by the
+    extractor, and never hashed: for video on a network share, a content
+    hash would be a second full read.
+  - `files(uri, size, mtime, content_hash, last_seen)` — content hashes, for
+    identical files only. When `(uri, size, mtime)` still matches, the file
+    is not hashed again.
+  - The price, accepted: a moved, renamed or copied file is extracted again,
+    and so is each of several identical copies.
 - Invalidate lazily on a stat mismatch. Garbage-collect by `last_seen` age and a
   size cap, **never by "the file does not exist right now"**. An unplugged
   drive or an unreachable server is not a deleted file, and its features
   should still be there when it comes back.
 - Use WAL mode, and serialize writes, because a CLI run and XeFM may scan at
   the same time.
-- The `files.uri` key is only a shortcut that skips re-reading a file. If two
-  callers spell the same file differently (`/var/…` vs `/private/var/…`), the
-  file is hashed again, and its features are still found by content hash.
-  Canonicalize where it is cheap, and don't build correctness on it.
+- If two callers spell the same file differently (`/var/…` vs
+  `/private/var/…`), it is hashed and extracted again under each spelling.
+  That costs time, never correctness. Canonicalize where it is cheap, and
+  don't build correctness on it.
 - **Never write anything next to the files being scanned.** The scanned
   folders may be read-only, remote, or simply not ours.
 

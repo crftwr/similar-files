@@ -57,7 +57,10 @@ Every scan function takes:
 - `cancel`: a callable returning `True` to stop. The scan stops handing out
   files and returns with `result.cancelled = True`, keeping the groups
   finished so far. Everything written to the cache stays valid.
-- `progress`: called with `Progress(phase, done, total)`.
+- `progress`: called with `Progress(phase, done, total)` for counts, and
+  once per file event with `uri` and `event` set as well: `"cached"` (found
+  in the cache, not read), `"start"`, `"done"` (with `seconds`),
+  `"unreadable"` or `"failed"`. The command line prints each as a line.
 - `on_group` (identical files): called as each group completes.
 
 All callbacks run on the thread that called the scan. The library never

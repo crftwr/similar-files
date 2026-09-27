@@ -91,14 +91,17 @@ def test_regroup_without_reextracting(tmp_path, cache_path):
     assert tight == []
 
 
-def test_features_are_cached_and_reused_by_content(tmp_path, cache_path):
+def test_features_are_cached_by_file(tmp_path, cache_path):
     make(tmp_path, a=1, b=2)
     extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
     assert NumberExtractor.calls == 2
-    # Unchanged files: no extraction. A copy under a new name: found by content hash.
+    # Unchanged files: no extraction. A new file (even a copy) and a changed one: extracted.
     write(tmp_path / "copy.num", b"1")
-    extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
-    assert NumberExtractor.calls == 2
+    write(tmp_path / "b.num", b"3")
+    os.utime(tmp_path / "b.num", ns=(1, 1))
+    fs = extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
+    assert NumberExtractor.calls == 4
+    assert sorted(int.from_bytes(f, "big") for f in fs.features) == [1, 1, 3]
 
 
 def test_parameters_are_part_of_the_cache_key(tmp_path, cache_path):
@@ -108,12 +111,6 @@ def test_parameters_are_part_of_the_cache_key(tmp_path, cache_path):
     assert NumberExtractor.calls == 2
     extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path)
     assert NumberExtractor.calls == 2  # switching back is free
-
-
-def test_duplicates_are_extracted_once(tmp_path):
-    make(tmp_path, a=5, b=5, c=5)
-    extract_features(walk([tmp_path]), NumberExtractor(), cache=False, workers=1)
-    assert NumberExtractor.calls == 1
 
 
 def test_unreadable_content_is_cached_as_a_failure(tmp_path, cache_path):
@@ -191,3 +188,69 @@ def test_cancel(tmp_path, cache_path):
     make(tmp_path, a=0, b=1)
     result = find_similar(walk([tmp_path]), NumberExtractor(), cache=cache_path, cancel=lambda: True)
     assert result.cancelled and result.groups == []
+
+
+def test_a_file_is_read_only_by_the_program_that_extracts_it(tmp_path, cache_path, monkeypatch):
+    """No content hash: a program-run extractor is the only reader, and a cached file is not read at all."""
+
+    class PathNumber(NumberExtractor):
+        needs_path = True
+
+        def extract_file(self, path):
+            type(self).calls += 1
+            with open(path, "rb") as f:
+                return int(f.read()).to_bytes(8, "big", signed=True)
+
+    opened = []
+    real_open = LocalFile.open
+    monkeypatch.setattr(LocalFile, "open", lambda self: opened.append(self.uri) or real_open(self))
+    make(tmp_path, a=1, b=2)
+    fs = extract_features(walk([tmp_path]), PathNumber(), cache=cache_path)
+    assert opened == [] and PathNumber.calls == 2
+    assert sorted(int.from_bytes(f, "big") for f in fs.features) == [1, 2]
+    extract_features(walk([tmp_path]), PathNumber(), cache=cache_path)
+    assert opened == [] and PathNumber.calls == 2
+
+
+def test_cancel_keeps_files_finished_behind_a_long_one(tmp_path, cache_path):
+    """Results are taken as they finish: a long first file does not lose the ones done after it."""
+
+    class SlowFirst(NumberExtractor):
+        needs_path = True
+        slow = True
+
+        def extract_file(self, path):
+            type(self).calls += 1
+            if self.slow and os.path.basename(path) == "a.num":
+                run_program([sys.executable, "-c", "import time; time.sleep(30)"], timeout=60)
+            with open(path, "rb") as f:
+                return int(f.read()).to_bytes(8, "big", signed=True)
+
+    make(tmp_path, a=1, b=2, c=3, d=4)
+    items = sorted(walk([tmp_path]), key=lambda i: i.uri)  # a.num is handed out first
+    started = time.monotonic()
+    fs = extract_features(items, SlowFirst(), cache=cache_path, workers=2,
+                          cancel=lambda: SlowFirst.calls == 4 and time.monotonic() - started > 1)
+    assert fs.result.cancelled and fs.result.errors == 0
+    assert sorted(int.from_bytes(f, "big") for f in fs.features) == [2, 3, 4]
+    # Only the file that was cut short is extracted again.
+    SlowFirst.calls, SlowFirst.slow = 0, False
+    fs = extract_features(items, SlowFirst(), cache=cache_path)
+    assert SlowFirst.calls == 1 and len(fs.features) == 4
+
+
+def test_each_file_is_reported(tmp_path, cache_path):
+    make(tmp_path, a=1, b=2)
+    write(tmp_path / "bad.num", b"hello")
+    events = []
+
+    def progress(p):
+        if p.uri is not None:
+            events.append((p.event, os.path.basename(p.uri)))
+
+    extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path, progress=progress, workers=1)
+    assert sorted(events) == sorted([("start", "a.num"), ("done", "a.num"), ("start", "b.num"), ("done", "b.num"),
+                                     ("start", "bad.num"), ("unreadable", "bad.num")])
+    events.clear()
+    extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path, progress=progress)
+    assert sorted(events) == [("cached", "a.num"), ("cached", "b.num"), ("cached", "bad.num")]

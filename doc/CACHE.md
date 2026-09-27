@@ -1,6 +1,7 @@
 # The cache
 
-similar-files keeps what it computes (content hashes and features) in one
+similar-files keeps what it computes (features, and content hashes for
+identical files) in one
 SQLite database per user. It is a **cache, not state**: deleting it loses
 nothing but time. The schema is documented because other programs (XeFM)
 share the file; they should use the library to read it, not SQL.
@@ -30,7 +31,7 @@ WAL mode, a 30-second busy timeout, and every write in a short
 Within one scan, only the scanning thread writes; worker threads read through
 their own connections.
 
-## Schema (version 1, in `PRAGMA user_version`)
+## Schema (version 2, in `PRAGMA user_version`)
 
 ```sql
 CREATE TABLE files (
@@ -42,24 +43,33 @@ CREATE TABLE files (
     last_seen    INTEGER NOT NULL   -- Unix time
 );
 CREATE TABLE features (
-    content_hash      TEXT NOT NULL,
+    uri               BLOB NOT NULL,  -- as in files
+    size              INTEGER NOT NULL,
+    mtime_ns          INTEGER NOT NULL,
+    validator         TEXT,
     extractor         TEXT NOT NULL,
     extractor_version INTEGER NOT NULL,
     params_digest     TEXT NOT NULL,  -- first 16 hex of sha256 over the sorted-key JSON of the parameters
     data              BLOB,           -- the extractor's encoding; NULL = it could not read the file
     last_seen         INTEGER NOT NULL,
-    PRIMARY KEY (content_hash, extractor, extractor_version, params_digest)
+    PRIMARY KEY (uri, extractor, extractor_version, params_digest)
 );
 ```
 
-- `files` is only a shortcut: while `(uri, size, mtime_ns, validator)`
-  matches, the file is not read again. Two spellings of one path just cost a
-  second hash.
-- `features` is keyed by content, so a moved or copied file reuses its
-  features, and duplicates are extracted once. A different parameter value
-  is a different row, so switching back is free.
-- An older schema is dropped and recreated. A newer one is refused
-  (`CacheError`): use another `--cache`.
+- `files` holds content hashes, for identical files only. While
+  `(uri, size, mtime_ns, validator)` matches, the file is not hashed again.
+- `features` is keyed by the file, not by its content. A row is used while
+  its `(size, mtime_ns, validator)` matches the file's; otherwise the file is
+  extracted again, and the new row replaces it. The file is read once, by
+  the extractor, and never hashed: for large files on a network share, a
+  content hash would double the transfer.
+- The price: a moved, renamed or copied file is extracted again, and so is
+  each of several identical copies. Two spellings of one path cost a second
+  extraction.
+- A different parameter value is a different row, so switching back is free.
+- Schema 1 keyed features by content hash. Opening it keeps `files` and
+  drops `features`. Any other older schema is dropped and recreated. A newer
+  one is refused (`CacheError`): use another `--cache`.
 
 ## Garbage collection
 

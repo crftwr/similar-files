@@ -90,6 +90,19 @@ def test_progress_is_whole_lines_on_a_pipe(tree, capsys):
     assert lines[-1].startswith("1 group(s)")
 
 
+def test_each_file_gets_a_line_and_a_rerun_says_cached(tree, capsys):
+    assert run(tree) == 0
+    lines = capsys.readouterr().out.splitlines()
+    for name in ("a.bin", "b.bin", "c.bin"):  # all 2000 bytes: hashed in full
+        assert any(line.startswith("start ") and line.endswith(name) for line in lines)
+        assert any(line.startswith("done ") and "/3]" in line and line.endswith(name) for line in lines)
+    assert run(tree, "--replace") == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert sorted(os.path.basename(line.split()[-1]) for line in lines if line.startswith("cached ")) == [
+        "a.bin", "b.bin", "c.bin"]
+    assert not any(line.startswith("start ") for line in lines)
+
+
 def test_quiet_prints_no_progress(tree, capsys):
     assert run(tree, "--quiet") == 0
     assert capsys.readouterr().out == ""

@@ -191,3 +191,33 @@ def test_cache_object_is_left_open_for_the_caller(cache_path):
     with Cache(cache_path) as cache:
         find_identical([], cache=cache)
         assert cache.stats()["files"] == 0
+
+
+def test_cancel_keeps_hashes_finished_in_later_buckets(tmp_path, cache_path, monkeypatch):
+    """The largest bucket is waited for first; hashes already done for smaller ones are still cached."""
+    import time
+
+    from similar_files import identical
+    from similar_files.model import Cancelled
+
+    real_hash = identical.hash_stream
+
+    def slow_for_big(stream, stop=None):
+        if getattr(stream, "name", "").endswith("big1"):
+            while not stop.is_set():
+                time.sleep(0.01)
+            raise Cancelled()
+        return real_hash(stream, stop)
+
+    monkeypatch.setattr(identical, "hash_stream", slow_for_big)
+    for name in ("big1", "big2"):
+        write(tmp_path / name, b"B" * 100)
+    for name in ("small1", "small2"):
+        write(tmp_path / name, b"s" * 50)
+    started = time.monotonic()
+    result = find_identical(walk([tmp_path]), cache=cache_path, cancel=lambda: time.monotonic() - started > 1)
+    assert result.cancelled
+    with Cache(cache_path) as c:
+        for name in ("small1", "small2", "big2"):
+            item = LocalFile.from_path(tmp_path / name)
+            assert c.content_hash(item.uri, item.size, item.mtime_ns) is not None, name
