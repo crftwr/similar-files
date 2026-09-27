@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "similar-files"
+description = "Find identical and similar files, and write each group as a playlist"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "craftware" }]
+requires-python = ">=3.10"
+dynamic = ["version"]
+# Core: standard library only. Layer 1 (identical files) needs nothing more.
+dependencies = []
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Filesystems",
+    "Topic :: Utilities",
+]
+
+[project.optional-dependencies]
+image = ["Pillow>=10", "ImageHash>=4.3"]
+test = ["pytest"]
+
+[project.scripts]
+similar-files = "similar_files.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/crftwr/similar-files"
+Repository = "https://github.com/crftwr/similar-files"
+
+[tool.setuptools.packages.find]
+include = ["similar_files*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "similar_files.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
