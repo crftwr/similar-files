@@ -12,6 +12,7 @@ import hashlib
 import io
 import logging
 import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Optional, Sequence
@@ -149,12 +150,9 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
     memo: dict[str, Optional[bytes]] = {}
     memo_lock = threading.Lock()
 
-    def work(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
-        """``(content_hash, feature or None, newly_extracted)``."""
-        if stop.is_set():
-            raise Cancelled()
+    def read(item: FileItem, stop: threading.Event, sink) -> str:
+        """Read ``item`` once, feeding ``sink`` every chunk; return its content hash."""
         h = hashlib.sha256()
-        buf = io.BytesIO()
         with item.open() as f:
             while True:
                 if stop.is_set():
@@ -163,23 +161,67 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
                 if not chunk:
                     break
                 h.update(chunk)
-                buf.write(chunk)
-        content_hash = f"{HASH_ALGORITHM}:{h.hexdigest()}"
+                if sink is not None:
+                    sink(chunk)
+        return f"{HASH_ALGORITHM}:{h.hexdigest()}"
+
+    def known(content_hash: str) -> tuple[bool, Optional[bytes]]:
         with memo_lock:
             if content_hash in memo:
-                return content_hash, memo[content_hash], False
-        hit, data = readers.get().feature(content_hash, key)
-        if hit:
-            return content_hash, data, False
-        buf.seek(0)
+                return True, memo[content_hash]
+        return readers.get().feature(content_hash, key)
+
+    def extracted(item: FileItem, content_hash: str, run) -> tuple[str, Optional[bytes], bool]:
         try:
-            data = extractor.extract(buf)
+            data = run()
         except ExtractionFailed as exc:
             logger.warning("%s: %s cannot read it: %s", item.uri, extractor.name, exc)
             data = None
         with memo_lock:
             memo[content_hash] = data
         return content_hash, data, True
+
+    def work(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
+        """``(content_hash, feature or None, newly_extracted)``."""
+        if stop.is_set():
+            raise Cancelled()
+        if extractor.needs_path:
+            return work_on_path(item, stop)
+        buf = io.BytesIO()
+        content_hash = read(item, stop, buf.write)
+        hit, data = known(content_hash)
+        if hit:
+            return content_hash, data, False
+        buf.seek(0)
+        return extracted(item, content_hash, lambda: extractor.extract(buf))
+
+    def work_on_path(item: FileItem, stop: threading.Event) -> tuple[str, Optional[bytes], bool]:
+        # The tool that extracts (ffmpeg, fpcalc) opens a file by name, and a
+        # container such as MP4 needs to seek, so it cannot read a pipe.
+        local = getattr(item, "local_path", None)
+        if local:
+            # Read twice: once here for the content hash, once by the tool.
+            # The hash comes first so a cached feature skips the tool entirely.
+            content_hash = read(item, stop, None)
+            hit, data = known(content_hash)
+            if hit:
+                return content_hash, data, False
+            return extracted(item, content_hash, lambda: extractor.extract_file(local))
+        # Remote: download once into a temporary file, hashing on the way.
+        suffix = os.path.splitext(item.uri.rsplit("/", 1)[-1])[1][:16]
+        fd, tmp = tempfile.mkstemp(prefix="similar-files-", suffix=suffix)
+        try:
+            with os.fdopen(fd, "wb") as out:
+                content_hash = read(item, stop, out.write)
+            hit, data = known(content_hash)
+            if hit:
+                return content_hash, data, False
+            return extracted(item, content_hash, lambda: extractor.extract_file(tmp))
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     new_hashes: list[tuple] = []
     new_features: list[tuple] = []

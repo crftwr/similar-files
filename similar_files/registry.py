@@ -11,6 +11,7 @@ import importlib.util
 import json
 import logging
 import os
+import shutil
 from typing import Any, BinaryIO, ClassVar, Optional, Sequence
 
 from .cache import FeatureKey
@@ -61,6 +62,12 @@ class Extractor:
     default_threshold: ClassVar[float] = 0.9
     #: One line for listings.
     description: ClassVar[str] = ""
+    #: Extract with :meth:`extract_file` from a path on disk rather than
+    #: :meth:`extract` from an in-memory stream: for files too big to hold in
+    #: memory, or read by an external program (ffmpeg, fpcalc).
+    needs_path: ClassVar[bool] = False
+    #: External programs the extractor runs, looked up on ``PATH``.
+    requires_programs: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, **params: Any):
         unknown = set(params) - set(self.default_params)
@@ -80,13 +87,19 @@ class Extractor:
 
     @classmethod
     def is_available(cls) -> bool:
-        return all(importlib.util.find_spec(m) is not None for m in cls.requires)
+        return all(importlib.util.find_spec(m) is not None for m in cls.requires) and all(
+            shutil.which(p) is not None for p in cls.requires_programs
+        )
 
     @classmethod
     def install_hint(cls) -> str:
-        if cls.extra:
-            return f'pip install "similar-files[{cls.extra}]"'
-        return "install " + ", ".join(cls.requires)
+        hints = []
+        if any(importlib.util.find_spec(m) is None for m in cls.requires):
+            hints.append(f'pip install "similar-files[{cls.extra}]"' if cls.extra else "install " + ", ".join(cls.requires))
+        missing = [p for p in cls.requires_programs if shutil.which(p) is None]
+        if missing:
+            hints.append("put " + ", ".join(missing) + " on PATH")
+        return "; ".join(hints) or "available"
 
     @property
     def params_digest(self) -> str:
@@ -109,6 +122,17 @@ class Extractor:
         read. Called on a worker thread.
         """
         raise NotImplementedError
+
+    def extract_file(self, path: str) -> bytes:
+        """The feature of the local file at ``path``. Used instead of
+        :meth:`extract` when :attr:`needs_path` is true.
+
+        ``path`` is the item's own ``local_path`` when it has one, or a
+        temporary copy of a remote item, deleted afterwards. Never write to
+        it. Raise :class:`ExtractionFailed` as for :meth:`extract`.
+        """
+        with open(path, "rb") as f:
+            return self.extract(f)
 
     def similarity(self, a: bytes, b: bytes) -> float:
         """Similarity of two features, 0–1."""
@@ -151,7 +175,7 @@ def _load_builtins() -> None:
     global _builtins_loaded
     if not _builtins_loaded:
         _builtins_loaded = True
-        from . import image  # noqa: F401 - registers itself
+        from . import audio, image, video  # noqa: F401 - each registers itself
 
 
 def extractors() -> dict[str, type[Extractor]]:

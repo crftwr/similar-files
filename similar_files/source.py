@@ -41,6 +41,14 @@ class FileItem(Protocol):
         hash without sending the bytes (``sha256sum`` on an SSH host, a
         single-part S3 ETag as ``md5:…``), or ``None``. A source that cannot
         be sure its hash is a content hash returns ``None``.
+
+    Optional:
+
+    ``local_path``
+        A path the operating system can open, when the content is on a
+        local or mounted filesystem. Extractors that run an external
+        program (video, audio) use it directly; without it they work on a
+        temporary copy. Leave it out, or ``None``, for anything else.
     """
 
     uri: str
@@ -69,6 +77,10 @@ class LocalFile:
 
     @property
     def uri(self) -> str:
+        return self.path
+
+    @property
+    def local_path(self) -> str:
         return self.path
 
     def open(self) -> BinaryIO:

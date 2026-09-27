@@ -28,8 +28,15 @@ PuiKit have it). Tests live in `test/`, docs in `doc/`.
 3. **Semantic** — "the same scene", "screenshots of receipts": embeddings.
    Later, heavy, and strictly opt-in.
 
-**Current scope: layer 1 and layer 2 for images.** Video, audio and layer 3
-come later. Don't build them ahead of time.
+**Current scope: layers 1 and 2** (identical files; similar images, video and
+audio). Layer 3 comes later. Don't build it ahead of time.
+
+Video and audio run external programs (`ffmpeg`/`ffprobe`, Chromaprint's
+`fpcalc`), not Python packages. An extractor declares them in
+`requires_programs`, and is unavailable, with a hint, when they are not on
+`PATH`. They read a file by path (`needs_path`), because a container like MP4
+must seek: a local item's `local_path` is used as it is, and a remote item is
+downloaded once to a temporary file.
 
 ### Outlook: beyond images, video and audio
 
@@ -287,8 +294,9 @@ what to keep" feature may produce a *selection*, never an action.
 
 - **Core: standard library only.** Layer 1 must work with a bare
   `pip install similar-files`.
-- Optional features go in extras: `[image]` for Pillow and `imagehash`,
-  `numpy` where vector math needs it, and later `[video]` and `[audio]`.
+- Optional features go in extras: `[image]` for Pillow and `imagehash`, and
+  `numpy` where vector math needs it. Video and audio need no Python package,
+  only the programs above, so they have no extra.
   Import an optional package **inside** the extractor or function that needs
   it, never at module top level.
 - An approximate-nearest-neighbour index (faiss, hnswlib) is not a starting

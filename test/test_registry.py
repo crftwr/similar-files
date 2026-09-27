@@ -39,3 +39,22 @@ def test_params_are_checked_and_coerced():
     with pytest.raises(ValueError):
         P(colour=1)
     assert P().params_digest == P(size=8).params_digest != P(size=9).params_digest
+
+
+def test_a_missing_program_makes_an_extractor_unavailable(monkeypatch):
+    from similar_files import Extractor, ExtractorUnavailable, get_extractor, register
+    from similar_files import registry
+
+    @register
+    class NeedsTool(Extractor):
+        name = "needs-tool"
+        version = 1
+        requires_programs = ("surely-not-a-real-program-xyz",)
+
+    try:
+        assert not NeedsTool.is_available()
+        assert "surely-not-a-real-program-xyz" in NeedsTool.install_hint()
+        with pytest.raises(ExtractorUnavailable):
+            get_extractor("needs-tool")
+    finally:
+        registry._REGISTRY.pop("needs-tool", None)

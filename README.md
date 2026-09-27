@@ -3,8 +3,8 @@
 Find files that are the same, or that look the same, and get each group as a
 playlist you can open anywhere.
 
-> **Status: early development.** Identical files and similar images work from
-> a checkout; nothing is released on PyPI yet.
+> **Status: early development.** The command line and the library may still
+> change between releases.
 
 ## What it finds
 
@@ -12,8 +12,13 @@ playlist you can open anywhere.
   folders. Needs nothing beyond Python.
 - **Similar images**: the same picture resized, re-encoded or lightly edited.
   Uses an optional dependency.
+- **Similar videos**: the same video re-encoded, resized or re-muxed. Needs
+  [ffmpeg](https://ffmpeg.org) on your `PATH`.
+- **Similar audio**: the same recording re-encoded, or with its tags changed.
+  Needs `fpcalc` from [Chromaprint](https://acoustid.org/chromaprint) on your
+  `PATH` (`brew install chromaprint`, `apt install libchromaprint-tools`).
 
-Similar video, similar audio and content-aware matching are planned for later.
+Content-aware matching ("screenshots of receipts") is planned for later.
 
 ## How it works
 
@@ -23,6 +28,8 @@ pip install "similar-files[image]"   # plus similar images
 
 similar-files scan ~/Pictures --out ~/similar-groups              # identical files
 similar-files scan ~/Pictures --out ~/similar-images -m image     # similar images
+similar-files scan ~/Movies --out ~/similar-videos -m video       # similar videos
+similar-files scan ~/Music --out ~/similar-music -m audio         # similar audio
 similar-files scan ~/Pictures --out ~/copies -r ~/Desktop/logo.png  # copies of one file
 ```
 
@@ -55,7 +62,7 @@ Two guarantees:
 ## Using it from Python
 
 The command line is a thin wrapper. The scanning, caching and grouping are a
-library that other programs can call. XeFM will be the first program to use
+library that other programs can call, and XeFM is the first program to use
 it. See [doc/LIBRARY.md](doc/LIBRARY.md), and for the formats other programs
 read, [doc/PLAYLIST_FORMAT.md](doc/PLAYLIST_FORMAT.md) and
 [doc/CACHE.md](doc/CACHE.md).

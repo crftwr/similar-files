@@ -11,8 +11,13 @@ import similar_files as sf
 result = sf.find_identical(sf.walk(["/Users/me/Pictures"]))
 for group in result.groups:            # largest first
     print(group.anchor.uri, [m.item.uri for m in group.members])
-sf.write_playlists(result.groups, "/Users/me/similar-groups")
+sf.write_playlists(result.groups, "/Users/me/similar-groups", replace=True)
 ```
+
+`replace=True` first removes the playlists an earlier run wrote in that
+folder (files carrying the similar-files group tag; nothing else is
+touched). `sf.our_playlists(folder)` lists them and
+`sf.remove_playlists(folder)` removes them on their own.
 
 ## Similar images
 
@@ -24,7 +29,16 @@ groups = sf.group_features(fs, threshold=0.75)      # regroup, no re-extraction
 
 `sf.find_similar(items, "image", threshold=…)` does both in one call.
 Thresholds are similarities, 0–1, for every extractor; each extractor has a
-default (`image`: 0.8).
+default.
+
+| Extractor | Needs | Default threshold | Parameters |
+|---|---|---|---|
+| `image` | `pip install "similar-files[image]"` | 0.8 | `algorithm` (`phash`), `hash_size` (8) |
+| `video` | `ffmpeg`, `ffprobe` on `PATH` | 0.85 | `frames` (10) |
+| `audio` | `fpcalc` (Chromaprint) on `PATH` | 0.7 | `length` in seconds (120) |
+
+`sf.extractors()` lists them all, with `is_available()` and
+`install_hint()` on each class.
 
 ## Reference mode
 
@@ -63,6 +77,7 @@ A scan takes any iterable of objects with these attributes (see
 | `is_remote: bool` | Whether reading the content costs a network transfer. |
 | `open()` | A binary file object. Called only when content is needed. |
 | `content_hash()` | `"sha256:<hex>"` or `"md5:<hex>"` if the source can hash without sending the bytes, else `None`. |
+| `local_path` *(optional)* | A path the OS can open, when the content is on a local or mounted disk. Video and audio extraction run a program on it directly; without it they download the item once to a temporary file. |
 
 For example, over a file manager's own path objects:
 
@@ -91,6 +106,25 @@ Rules worth knowing:
 - Perceptual extraction skips remote items unless `include_remote=True`,
   and counts them in `result.skipped_remote`.
 
+Walking a remote folder is the adapter's job, because only the caller knows
+how to list it. A plain depth-first walk is enough:
+
+```python
+def walk_remote(root):
+    stack = [root]
+    while stack:
+        path = stack.pop()
+        if path.is_dir():
+            stack.extend(path.iterdir())
+        else:
+            yield RemoteItem(path)
+
+result = sf.find_identical(walk_remote(root))
+```
+
+Local roots can go through `sf.walk()` in the same scan: chain the two
+iterables.
+
 ## Writing an extractor
 
 Subclass `sf.Extractor`, set `name`, `version`, `extensions`, `requires`,
@@ -100,3 +134,8 @@ decorate the class with `@sf.register`. Import optional packages inside
 `extract`, never at module top level. Raise `sf.ExtractionFailed` for a file
 you recognize but cannot read. Bump `version` whenever the output changes.
 For speed over many files, override `prepare()` and `similarities()`.
+
+An extractor that runs an external program sets `needs_path = True` and
+implements `extract_file(path) -> bytes` instead of `extract`, and lists
+the programs in `requires_programs`. `path` is the item's `local_path`, or a
+temporary copy of a remote item; never write to it.
