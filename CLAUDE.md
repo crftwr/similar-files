@@ -31,7 +31,7 @@ PuiKit have it). Tests live in `test/`, docs in `doc/`.
 **Current scope: layers 1 and 2** (identical files; similar images, video and
 audio). Layer 3 comes later. Don't build it ahead of time.
 
-Video and audio run external programs (`ffmpeg`/`ffprobe`, Chromaprint's
+Video and audio run external programs (`ffmpeg`, Chromaprint's
 `fpcalc`), not Python packages. An extractor declares them in
 `requires_programs`, and is unavailable, with a hint, when they are not on
 `PATH`. They read a file by path (`needs_path`), because a container like MP4

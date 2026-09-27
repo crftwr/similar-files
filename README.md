@@ -12,8 +12,9 @@ playlist you can open anywhere.
   folders. Needs nothing beyond Python.
 - **Similar images**: the same picture resized, re-encoded or lightly edited.
   Uses an optional dependency.
-- **Similar videos**: the same video re-encoded, resized or re-muxed. Needs
-  [ffmpeg](https://ffmpeg.org) on your `PATH`.
+- **Similar videos**: the same video re-encoded, resized or re-muxed, and
+  clips cut out of a longer video. Needs [ffmpeg](https://ffmpeg.org) on your
+  `PATH`.
 - **Similar audio**: the same recording re-encoded, or with its tags changed.
   Needs `fpcalc` from [Chromaprint](https://acoustid.org/chromaprint) on your
   `PATH` (`brew install chromaprint`, `apt install libchromaprint-tools`).

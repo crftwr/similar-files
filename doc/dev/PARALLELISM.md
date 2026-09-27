@@ -40,11 +40,14 @@ decodes, and draft mode keeps JPEG decoding cheap.
 | 4 | 20.3 | 1.2 | 7.57 |
 | 8 | 19.5 | 1.2 | 8.08 |
 
-The work is inside ffmpeg, which is multithreaded on its own, so the machine
-is saturated at about 4 workers. Python is idle, waiting on subprocesses. The
-cost is decoding from the keyframe before each sampled frame. Taking
-keyframes only (`-skip_frame nokey`) would be much faster, but a re-encoded
-copy has its keyframes elsewhere, so the frames would no longer line up.
+This was version 1 of the video extractor. The work is inside ffmpeg, which
+is multithreaded on its own, so the machine is saturated at about 4 workers.
+Python is idle, waiting on subprocesses. The cost is decoding from the
+keyframe before each sampled frame.
+
+Version 2 decodes keyframes only, and aligns the two videos by time offset,
+so it no longer needs frames at the same places. The same 24 files take 3.5 s
+with 1 worker and 0.7 s with 8. See [VIDEO_SIMILARITY.md](VIDEO_SIMILARITY.md).
 
 **Identical files** (300 × 4 MB, in the page cache):
 
@@ -62,6 +65,7 @@ limit, not the CPU.
 
 - Keep the thread pool. No measured case is limited by the GIL.
 - The default of `min(8, CPU count)` local workers is right: beyond that,
-  images gain little, and video is already limited by ffmpeg's own threads.
+  images gain little. Video (version 2) still gains up to 8, and each ffmpeg
+  run is short.
 - Remote workers (default 4) have not been measured against a real S3 bucket
   or SSH host. Measure before changing that default.

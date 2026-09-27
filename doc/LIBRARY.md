@@ -34,8 +34,12 @@ default.
 | Extractor | Needs | Default threshold | Parameters |
 |---|---|---|---|
 | `image` | `pip install "similar-files[image]"` | 0.8 | `algorithm` (`phash`), `hash_size` (8) |
-| `video` | `ffmpeg`, `ffprobe` on `PATH` | 0.85 | `frames` (10) |
+| `video` | `ffmpeg` on `PATH` | 0.7 | `interval` in seconds (1.0) |
 | `audio` | `fpcalc` (Chromaprint) on `PATH` | 0.7 | `length` in seconds (120) |
+
+A video's similarity is the share of the shorter video found in the other,
+so a clip groups with the video it was cut from; see
+[dev/VIDEO_SIMILARITY.md](dev/VIDEO_SIMILARITY.md).
 
 `sf.extractors()` lists them all, with `is_available()` and
 `install_hint()` on each class.
