@@ -18,8 +18,23 @@ docker compose -f docker/compose.yaml up --build
 ```
 
 Create both folders before the first run, as the NAS user named by
-`PUID`/`PGID`. If they are missing, Docker creates them owned by root, and the
-scan cannot write to them.
+`PUID`/`PGID` (run `id <user>` over SSH to find both numbers). If they are
+missing, Docker creates them owned by root, and the scan cannot write to them.
+
+The container runs with that uid and gid only, **without the user's other
+groups**. On Synology, a folder made through File Station or over SMB takes its
+permissions from the shared folder's ACL, which often grants write access
+through the `administrators` group. Then the user can write to the folder, and
+the container cannot: the scan stops with `cannot open cache …: unable to open
+database file`. Give the user itself read and write access to both folders
+(File Station → Properties → Permission → Create, applied to subfolders and
+files). To test it:
+
+```bash
+sudo docker run --rm --user <PUID>:<PGID> --entrypoint sh \
+  -v <CACHE_HOST_DIR>:/cache similar-files:local \
+  -c 'touch /cache/x && echo writable; rm -f /cache/x'
+```
 
 Each method writes into its own folder: `<OUT_HOST_DIR>/identical`,
 `.../image`, `.../video`, `.../audio`. Each run replaces the playlists the
