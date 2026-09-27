@@ -7,6 +7,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -101,22 +102,40 @@ def _add_verbosity(p: argparse.ArgumentParser) -> None:
 
 
 class _ProgressLine:
-    """A single self-overwriting status line on stderr, when stderr is a terminal."""
+    """Progress for the user.
 
-    def __init__(self, enabled: bool):
-        self.enabled = enabled and sys.stderr.isatty()
+    On a terminal: a single self-overwriting status line on stderr. Otherwise
+    (a pipe, as when XeFM or another program runs the CLI and shows its
+    output line by line): whole lines on stdout, one when a phase starts, one
+    when it finishes, and at most one every ``interval`` seconds in between.
+    """
+
+    def __init__(self, enabled: bool, *, interval: float = 2.0):
+        self.enabled = enabled
+        self.tty = sys.stderr.isatty()
+        self.interval = interval
         self._width = 0
+        self._phase: Optional[str] = None
+        self._last = 0.0
 
     def __call__(self, p: Progress) -> None:
         if not self.enabled:
             return
         text = f"{p.phase}: {p.done}/{p.total}" if p.total else f"{p.phase}: {p.done}"
+        if not self.tty:
+            now = time.monotonic()
+            finished = bool(p.total) and p.done >= p.total
+            if p.phase != self._phase or finished or now - self._last >= self.interval:
+                print(text, flush=True)
+                self._phase = p.phase
+                self._last = now
+            return
         sys.stderr.write("\r" + text.ljust(self._width))
         sys.stderr.flush()
         self._width = len(text)
 
     def clear(self) -> None:
-        if self.enabled and self._width:
+        if self.enabled and self.tty and self._width:
             sys.stderr.write("\r" + " " * self._width + "\r")
             sys.stderr.flush()
             self._width = 0

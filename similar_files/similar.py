@@ -274,6 +274,8 @@ def group_features(
             group, _ = make(ref, ex.similarities(prepared, feature), None)
             if group is not None:
                 groups.append(group)
+        if progress is not None:
+            progress(Progress("group", total, total))
         return groups
 
     order = sorted(range(len(fs.items)), key=lambda i: (-fs.items[i].size, fs.items[i].uri))
@@ -293,6 +295,8 @@ def group_features(
         for j in near:
             grouped[j] = True
         groups.append(group)
+    if progress is not None:
+        progress(Progress("group", total, total))
     return groups
 
 

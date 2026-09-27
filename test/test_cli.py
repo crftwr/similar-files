@@ -78,3 +78,18 @@ def test_extractors_and_cache_commands(tree, capsys):
     assert main(["cache", "--cache", str(tree / "c.db")]) == 0
     assert "file(s)" in capsys.readouterr().out
     assert main(["cache", "gc", "--cache", str(tree / "c.db"), "--max-age-days", "30"]) == 0
+
+
+def test_progress_is_whole_lines_on_a_pipe(tree, capsys):
+    # capsys is not a terminal, like XeFM's log pane reading a pipe.
+    assert run(tree) == 0
+    out = capsys.readouterr().out
+    assert "\r" not in out
+    lines = out.splitlines()
+    assert any(line.startswith(("sample:", "hash:")) for line in lines)
+    assert lines[-1].startswith("1 group(s)")
+
+
+def test_quiet_prints_no_progress(tree, capsys):
+    assert run(tree, "--quiet") == 0
+    assert capsys.readouterr().out == ""
