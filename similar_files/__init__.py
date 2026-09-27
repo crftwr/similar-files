@@ -6,7 +6,7 @@ The public API is what this module exports. Everything else may change.
 from .cache import Cache, CacheError, default_cache_dir, resolve_cache_path
 from .identical import find_identical
 from .model import Group, Member, Progress, ScanResult
-from .playlist import read_playlist, write_playlists
+from .playlist import our_playlists, read_playlist, remove_playlists, write_playlists
 from .registry import (
     ExtractionFailed,
     Extractor,
@@ -41,8 +41,10 @@ __all__ = [
     "find_similar",
     "get_extractor",
     "group_features",
+    "our_playlists",
     "read_playlist",
     "register",
+    "remove_playlists",
     "resolve_cache_path",
     "walk",
     "write_playlists",

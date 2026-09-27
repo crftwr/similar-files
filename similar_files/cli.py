@@ -15,7 +15,7 @@ from . import __version__
 from .cache import Cache, CacheError
 from .identical import find_identical
 from .model import Progress
-from .playlist import SUFFIX, is_our_playlist, write_playlists
+from .playlist import our_playlists, write_playlists
 from .registry import ExtractorUnavailable, extractors, get_extractor
 from .similar import find_similar
 from .source import LocalFile, WalkStats, walk
@@ -146,7 +146,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     if out.exists() and not out.is_dir():
         logger.error("--out %s is not a folder", out)
         return 2
-    ours = [p for p in out.glob("*" + SUFFIX) if is_our_playlist(p)] if out.is_dir() else []
+    ours = our_playlists(out)
     if ours and not args.replace:
         logger.error("%s already holds %d playlist(s) from an earlier run; pass --replace to remove them", out, len(ours))
         return 2
@@ -211,10 +211,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         if cache is not False:
             cache.close()
 
-    if args.replace:
-        for p in ours:
-            p.unlink()
-    written = write_playlists(result.groups, out)
+    written = write_playlists(result.groups, out, replace=args.replace)
 
     if stats.hardlink_aliases:
         logger.info("%d hard link(s) counted once", stats.hardlink_aliases)

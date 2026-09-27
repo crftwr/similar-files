@@ -62,3 +62,16 @@ def test_line_breaks_in_names_are_left_out(tmp_path):
     _, entries = read_playlist(path)
     assert [u for u, _ in entries] == ["/a.jpg", "/good.jpg"]
     assert write_playlists([group("/bad\n.jpg", ("/x", 1.0))], tmp_path / "other") == []
+
+
+def test_replace_removes_only_our_earlier_playlists(tmp_path):
+    from similar_files import our_playlists, remove_playlists
+
+    write_playlists([group("/x/a.jpg", ("/y/b", 1.0))], tmp_path)
+    (tmp_path / "mine.m3u8").write_text("#EXTM3U\n/some/song.mp3\n")
+    (tmp_path / "notes.txt").write_text("keep")
+    (written,) = write_playlists([group("/x/c.jpg", ("/y/d", 1.0))], tmp_path, replace=True)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["c.jpg (1).m3u8", "mine.m3u8", "notes.txt"]
+    assert our_playlists(tmp_path) == [written]
+    assert remove_playlists(tmp_path) == 1
+    assert our_playlists(tmp_path / "missing") == []

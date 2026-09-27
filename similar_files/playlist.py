@@ -83,16 +83,22 @@ def render(group: Group) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_playlists(groups: Iterable[Group], out_dir: str | os.PathLike) -> list[Path]:
+def write_playlists(groups: Iterable[Group], out_dir: str | os.PathLike, *, replace: bool = False) -> list[Path]:
     """Write one playlist per group into ``out_dir`` (created if needed). Returns the paths written.
 
     Names never collide with each other or with files already in
     ``out_dir``: a clash gets `` [2]``, `` [3]``… appended. Groups whose
     anchor cannot be written (a line break in its name) are skipped and
     logged.
+
+    With ``replace``, playlists an earlier run wrote in ``out_dir`` are
+    removed first (see :func:`remove_playlists`), so the folder holds this
+    run's groups only. Anything else in it is left alone.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    if replace:
+        remove_playlists(out)
     taken = {_key(p.name) for p in out.iterdir()}
     written = []
     for group in groups:
@@ -113,6 +119,31 @@ def write_playlists(groups: Iterable[Group], out_dir: str | os.PathLike) -> list
             f.write(render(group))
         written.append(path)
     return written
+
+
+def our_playlists(out_dir: str | os.PathLike) -> list[Path]:
+    """The playlists similar-files wrote in ``out_dir`` (not in its subfolders)."""
+    out = Path(out_dir)
+    if not out.is_dir():
+        return []
+    return sorted(p for p in out.glob("*" + SUFFIX) if is_our_playlist(p))
+
+
+def remove_playlists(out_dir: str | os.PathLike) -> int:
+    """Delete the playlists similar-files wrote in ``out_dir``; returns how many.
+
+    Only files that carry the similar-files group tag are touched: a
+    playlist of the user's own in the same folder stays. This is the one
+    thing similar-files ever deletes, and only in its output folder.
+    """
+    n = 0
+    for p in our_playlists(out_dir):
+        try:
+            p.unlink()
+            n += 1
+        except FileNotFoundError:
+            pass
+    return n
 
 
 def is_our_playlist(path: str | os.PathLike) -> bool:
