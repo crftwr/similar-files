@@ -19,8 +19,7 @@ RUN pip install --no-cache-dir ".[image]" && rm -rf /src
 COPY docker/entrypoint.sh /usr/local/lib/similar-files-nas.sh
 
 # The cache lives in a mounted folder so it survives the container.
-ENV SIMILAR_FILES_CACHE=/cache/ \
-    PYTHONUNBUFFERED=1
+ENV SIMILAR_FILES_CACHE=/cache/
 
 WORKDIR /
 ENTRYPOINT ["sh", "/usr/local/lib/similar-files-nas.sh"]

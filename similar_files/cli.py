@@ -140,7 +140,7 @@ class _ProgressLog:
 
     def _print(self, line: str) -> None:
         try:
-            print(line, flush=True)
+            _write_line(line)
         except BrokenPipeError:
             # The reader went away (`| head`). The scan goes on without progress.
             self.enabled = False
@@ -153,6 +153,18 @@ class _ProgressLog:
         count = f"[{p.done}/{p.total}]" if p.total else f"[{p.done}]"
         took = f" {p.seconds:.1f}s" if p.seconds is not None else ""
         return f"{event} {count}{took}  {p.uri}"
+
+
+def _write_line(line: str) -> None:
+    """Write one line to stdout in one write, and flush it.
+
+    ``print()`` writes the text and the newline separately, and with
+    unbuffered stdout (``python -u``, ``PYTHONUNBUFFERED``) each becomes its
+    own write(2). A reader that splits lines at write boundaries, as a Docker
+    log driver on a busy host was seen to, then shows an empty line after it.
+    """
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
 
 
 def _stdout_to_devnull() -> None:
@@ -249,7 +261,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     if not args.quiet:
         members = sum(len(g.members) for g in result.groups)
         try:
-            print(f"{len(written)} group(s), {members} member(s) → {out}", flush=True)
+            _write_line(f"{len(written)} group(s), {members} member(s) → {out}")
         except BrokenPipeError:
             _stdout_to_devnull()
     return 130 if result.cancelled else (1 if errors else 0)
