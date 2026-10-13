@@ -33,7 +33,7 @@ default.
 
 | Extractor | Needs | Default threshold | Parameters |
 |---|---|---|---|
-| `image` | `pip install "similar-files[image]"` | 0.8 | `algorithm` (`phash`), `hash_size` (8) |
+| `image` | Pillow: `pip install "similar-files[image]"` (`whash` also needs `[whash]`) | 0.8 | `algorithm` (`phash`, `dhash`, `ahash`, `whash`), `hash_size` (8) |
 | `video` | `ffmpeg` on `PATH` | 0.7 | `interval` in seconds (1.0) |
 | `audio` | `fpcalc` (Chromaprint) on `PATH` | 0.7 | `length` in seconds (120) |
 

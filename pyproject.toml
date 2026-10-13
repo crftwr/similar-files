@@ -22,7 +22,9 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-image = ["Pillow>=10", "ImageHash>=4.3"]
+image = ["Pillow>=10"]
+# wHash (wavelets) only; pHash, dHash and aHash need nothing beyond Pillow.
+whash = ["Pillow>=10", "ImageHash>=4.3"]
 test = ["pytest"]
 
 [project.scripts]

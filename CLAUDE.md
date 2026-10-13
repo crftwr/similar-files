@@ -22,7 +22,8 @@ PuiKit have it). Tests live in `test/`, docs in `doc/`.
 
 1. **Identical** — same bytes. No third-party dependencies. Ships first.
 2. **Perceptual** — the same picture or sound after resizing or re-encoding:
-   perceptual hashes for images (`imagehash`), frames for video (ffmpeg), and
+   perceptual hashes for images (computed with Pillow alone; `imagehash` only
+   for wHash), frames for video (ffmpeg), and
    audio fingerprints (Chromaprint). Each is an **optional dependency**:
    supported, never required.
 3. **Semantic** — "the same scene", "screenshots of receipts": embeddings.
@@ -308,9 +309,13 @@ what to keep" feature may produce a *selection*, never an action.
 
 - **Core: standard library only.** Layer 1 must work with a bare
   `pip install similar-files`.
-- Optional features go in extras: `[image]` for Pillow and `imagehash`, and
-  `numpy` where vector math needs it. Video and audio need no Python package,
-  only the programs above, so they have no extra.
+- Optional features go in extras: `[image]` for Pillow, `[whash]` for
+  `imagehash` (wavelet hash only), and `numpy` where vector math needs it.
+  pHash, dHash and aHash are written out in `image.py` on Pillow alone and
+  match imagehash bit for bit: imagehash brings numpy, SciPy and PyWavelets
+  (about 140 MB), which is too much for a host like XeFM to bundle for one
+  DCT. Video and audio need no Python package, only the programs above, so
+  they have no extra.
   Import an optional package **inside** the extractor or function that needs
   it, never at module top level.
 - An approximate-nearest-neighbour index (faiss, hnswlib) is not a starting

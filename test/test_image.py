@@ -5,7 +5,6 @@ import os
 import pytest
 
 PIL = pytest.importorskip("PIL")
-pytest.importorskip("imagehash")
 
 from PIL import Image, ImageDraw, ImageFilter  # noqa: E402
 
@@ -68,6 +67,8 @@ def test_different_pictures_do_not_group(photos, cache_path):
 
 @pytest.mark.parametrize("algorithm", ["phash", "dhash", "ahash", "whash"])
 def test_every_algorithm_groups_a_resized_copy(tmp_path, algorithm):
+    if algorithm == "whash":
+        pytest.importorskip("imagehash")
     scene(4).save(tmp_path / "a.png")
     scene(4).resize((200, 150)).save(tmp_path / "b.png")
     scene(5).save(tmp_path / "c.png")
@@ -90,3 +91,32 @@ def test_bad_params():
         get_extractor("image", algorithm="nope")
     with pytest.raises(ValueError):
         get_extractor("image", hash_size=2)
+
+
+def test_pillow_alone_is_enough():
+    """pHash, dHash and aHash are computed here; only wHash wants imagehash."""
+    from similar_files.image import ImageExtractor
+    assert ImageExtractor.requires == ("PIL",)
+
+
+@pytest.mark.parametrize("name", ["phash", "dhash", "ahash"])
+def test_hashes_match_imagehash_bit_for_bit(name):
+    imagehash = pytest.importorskip("imagehash")
+    from similar_files import image as im
+    reference = {"phash": imagehash.phash, "dhash": imagehash.dhash,
+                 "ahash": imagehash.average_hash}[name]
+    for seed in range(12):
+        img = scene(seed)
+        ours = getattr(im, name + "_bits")(img, 8)
+        theirs = [bool(b) for b in reference(img, hash_size=8).hash.flatten()]
+        assert ours == theirs, seed
+
+
+def test_whash_without_imagehash_says_what_to_install(monkeypatch):
+    import importlib.util
+    from similar_files import get_extractor
+    real = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, "find_spec",
+                        lambda n, *a: None if n == "imagehash" else real(n, *a))
+    with pytest.raises(ValueError, match="similar-files\\[whash\\]"):
+        get_extractor("image", algorithm="whash")
