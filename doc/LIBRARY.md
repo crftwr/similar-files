@@ -62,6 +62,14 @@ Every scan function takes:
   in the cache, not read), `"start"`, `"done"` (with `seconds`),
   `"unreadable"` or `"failed"`. The command line prints each as a line.
 - `on_group` (identical files): called as each group completes.
+- `on_snapshot(groups, done, total)` (similar files, with
+  `snapshot_interval` seconds, default 300): **provisional** groups during
+  extraction, grouped from the features read so far. The first comes within
+  a minute, and the next waits at least ten times as long as grouping took.
+  They are not part of the final result: a file read later can join a group,
+  or become the anchor of a new one that takes members from it. Grouping
+  only happens at the end otherwise, so this is what lets a caller show a
+  long video scan's groups before it finishes.
 
 All callbacks run on the thread that called the scan. The library never
 prints and never exits; problems are logged under the `similar_files`

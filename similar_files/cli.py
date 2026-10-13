@@ -21,6 +21,7 @@ from .registry import ExtractorUnavailable, extractors, get_extractor
 from .similar import find_similar
 from .source import LocalFile, WalkStats, walk
 from .status import CANCELLED, DONE, FAILED, StatusFile, StopFile
+from . import tree
 
 logger = logging.getLogger("similar_files")
 
@@ -80,6 +81,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="extract features of remote files too (downloads them)",
     )
     scan.add_argument("--min-size", type=int, default=1, metavar="BYTES", help="ignore smaller files (default 1)")
+    scan.add_argument(
+        "--format", choices=["m3u8", "tree"], default="m3u8",
+        help="m3u8: one playlist per group in the --out folder (default); "
+             "tree: every group in one .xefml file named by --out, rewritten as the scan goes",
+    )
+    scan.add_argument(
+        "--snapshot-interval", type=float, default=300.0, metavar="SECONDS",
+        help="tree format: rewrite the file with provisional groups about this often (default 300; 0: only at the end)",
+    )
     scan.add_argument(
         "--status", metavar="FILE",
         help="keep the scan's progress in FILE as JSON, for a program watching from outside",
@@ -201,13 +211,22 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 
 def _scan(args: argparse.Namespace, status: Optional[StatusFile], summary: dict) -> int:
     out = Path(args.out).expanduser()
-    if out.exists() and not out.is_dir():
-        logger.error("--out %s is not a folder", out)
-        return 2
-    ours = our_playlists(out)
-    if ours and not args.replace:
-        logger.error("%s already holds %d playlist(s) from an earlier run; pass --replace to remove them", out, len(ours))
-        return 2
+    as_tree = args.format == "tree"
+    if as_tree:
+        if out.is_dir():
+            logger.error("--out %s is a folder; with --format tree it names the .xefml file", out)
+            return 2
+        if out.exists() and not args.replace:
+            logger.error("%s already exists; pass --replace to overwrite it", out)
+            return 2
+    else:
+        if out.exists() and not out.is_dir():
+            logger.error("--out %s is not a folder", out)
+            return 2
+        ours = our_playlists(out)
+        if ours and not args.replace:
+            logger.error("%s already holds %d playlist(s) from an earlier run; pass --replace to remove them", out, len(ours))
+            return 2
 
     extractor = None
     if args.method != "identical":
@@ -262,24 +281,54 @@ def _scan(args: argparse.Namespace, status: Optional[StatusFile], summary: dict)
     except CacheError as exc:
         logger.error("%s", exc)
         return 2
+    writer = None
+    if as_tree:
+        what = "Identical files" if extractor is None else f"Similar ({args.method})"
+        writer = tree.TreeWriter(out, title=f"{what} in {', '.join(args.roots)}")
+    snapshots = {}
+    if writer is not None and args.snapshot_interval > 0:
+        if extractor is None:
+            # Identical groups are final as each size bucket closes: collect
+            # them as they come and rewrite the file at most every interval.
+            found: list = []
+            last = [0.0]
+
+            def on_group(group) -> None:
+                found.append(group)
+                now = time.monotonic()
+                if now - last[0] >= min(args.snapshot_interval, 30.0):
+                    last[0] = now
+                    writer.snapshot(found, final_groups={id(g) for g in found})
+
+            snapshots["on_group"] = on_group
+        else:
+            def on_snapshot(groups, done, total) -> None:
+                writer.snapshot(groups, done=done, total=total)
+
+            snapshots["on_snapshot"] = on_snapshot
+            snapshots["snapshot_interval"] = args.snapshot_interval
     try:
         common = dict(
             references=references, cache=cache, workers=args.workers, remote_workers=args.remote_workers,
             progress=progress, cancel=cancelled,
         )
         if extractor is None:
-            result = find_identical(items, min_size=args.min_size, **common)
+            result = find_identical(items, min_size=args.min_size, **common, **snapshots)
         else:
             result = find_similar(
                 (i for i in items if i.size >= args.min_size), extractor,
-                threshold=args.threshold, include_remote=args.include_remote, **common,
+                threshold=args.threshold, include_remote=args.include_remote, **common, **snapshots,
             )
     finally:
         signal.signal(signal.SIGINT, previous)
         if cache is not False:
             cache.close()
 
-    written = write_playlists(result.groups, out, replace=args.replace)
+    if writer is not None:
+        writer.finish(result.groups, complete=not result.cancelled)
+        written = writer.last_groups if (result.cancelled and not result.groups) else result.groups
+    else:
+        written = write_playlists(result.groups, out, replace=args.replace)
     summary.update(groups=len(written), members=sum(len(g.members) for g in result.groups))
 
     if stats.hardlink_aliases:

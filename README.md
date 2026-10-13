@@ -73,6 +73,13 @@ similar-files scan ~/Movies --out ~/groups -m video \
     --status ~/scan/status.json --stop-file ~/scan/stop
 ```
 
+Add `--format tree` and `--out` names one `.xefml` file instead of a folder.
+It holds every group, and it is rewritten every few minutes while the scan
+runs, so you can start looking before the scan ends. Those intermediate
+groups are provisional: a file read later can still join one, or start a
+new group. The last write is final. XeFM opens this file the way it opens an
+archive.
+
 XeFM starts scans this way, so they keep running after you close it. See
 [doc/STATUS_FORMAT.md](https://github.com/crftwr/similar-files/blob/main/doc/STATUS_FORMAT.md).
 

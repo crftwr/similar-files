@@ -241,6 +241,17 @@ time.
   `#` lines in playlists.
 - CSV/JSON output for scripts may come later. The playlist stays the
   primary output.
+- **The other output is one `.xefml` tree file** (`--format tree`), XeFM's
+  format for a tree of references (xefm#549; the spec is XeFM's
+  `doc/XEFML_FORMAT.md`, written here, never imported). It exists so a long
+  scan's groups can be looked at **before the scan ends**: the file is
+  replaced whole every few minutes with provisional groups (`final: false`,
+  `generation` counting up), and once more at the end. Provisional means
+  provisional. A file read later can join a group or become a new anchor,
+  because anchors are chosen over all features. Appending finished groups
+  was rejected for that reason: it is correct only for identical files,
+  whose groups close a size bucket at a time. A stopped scan's last write
+  keeps its last snapshot's groups, marked `complete: false`.
 
 ### Remote files, and how XeFM hands them in
 

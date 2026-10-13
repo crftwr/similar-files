@@ -165,3 +165,30 @@ def test_read_status_of_nothing(tmp_path):
     assert read_status(tmp_path / "missing.json") is None
     (tmp_path / "bad.json").write_text("{")
     assert read_status(tmp_path / "bad.json") is None
+
+
+def test_tree_format_writes_one_file(tree):
+    from similar_files.tree import read as read_tree
+
+    out = tree / "result.xefml"
+    assert main(["scan", str(tree / "in"), "--out", str(out), "--cache", str(tree / "c.db"),
+                 "--format", "tree", "-q"]) == 0
+    doc = read_tree(out)
+    assert doc["final"] is True and doc["complete"] is True
+    assert doc["generation"] >= 1
+    (group,) = doc["nodes"]
+    assert group["name"] == "a.bin (1)"
+    names = [c["name"] for c in group["children"]]
+    assert names == ["a.bin", "b.bin"]
+    anchor = group["children"][0]
+    assert anchor["extra"]["role"] == "anchor"
+    assert anchor["target"].endswith("a.bin")
+    assert anchor["attrs"]["size"] == 2000
+    # Rerunning needs --replace, as for playlists.
+    assert main(["scan", str(tree / "in"), "--out", str(out), "--cache", str(tree / "c.db"),
+                 "--format", "tree", "-q"]) == 2
+
+
+def test_tree_format_out_must_not_be_a_folder(tree):
+    (tree / "dir").mkdir()
+    assert main(["scan", str(tree / "in"), "--out", str(tree / "dir"), "--format", "tree", "-q"]) == 2

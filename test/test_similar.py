@@ -254,3 +254,29 @@ def test_each_file_is_reported(tmp_path, cache_path):
     events.clear()
     extract_features(walk([tmp_path]), NumberExtractor(), cache=cache_path, progress=progress)
     assert sorted(events) == [("cached", "a.num"), ("cached", "b.num"), ("cached", "bad.num")]
+
+
+def test_snapshots_hand_over_provisional_groups_while_extracting(tmp_path):
+    make(tmp_path, a=1, b=2, c=50, d=51, e=100)
+    seen = []
+    result = find_similar(
+        walk([str(tmp_path)]), NumberExtractor(), cache=False, workers=1,
+        on_snapshot=lambda groups, done, total: seen.append((done, total, len(groups))),
+        snapshot_interval=0,
+    )
+    # One snapshot per finished file at interval 0, counting up.
+    assert [d for d, _t, _n in seen] == list(range(1, len(seen) + 1))
+    assert all(t == 5 for _d, t, _n in seen)
+    # Each is grouped from what was read so far; the final result has both pairs.
+    assert len(result.groups) == 2
+    assert max(n for _d, _t, n in seen) <= 2
+
+
+def test_no_snapshot_from_a_cancelled_scan(tmp_path):
+    make(tmp_path, a=1, b=2)
+    seen = []
+    find_similar(
+        walk([str(tmp_path)]), NumberExtractor(), cache=False, workers=1,
+        on_snapshot=lambda *a: seen.append(a), snapshot_interval=0, cancel=lambda: True,
+    )
+    assert seen == []

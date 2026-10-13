@@ -52,6 +52,8 @@ def extract_features(
     remote_workers: Optional[int] = None,
     progress: Optional[ProgressCallback] = None,
     cancel: Optional[CancelCheck] = None,
+    snapshot: Optional[Callable[[FeatureSet, int, int], None]] = None,
+    snapshot_interval: float = 300.0,
 ) -> FeatureSet:
     """Extract (or fetch from the cache) the features of every item the extractor handles.
 
@@ -60,6 +62,13 @@ def extract_features(
     true, because extracting means downloading the whole file. References
     are always extracted: the caller named them. Each file is read once: its
     content hash is computed in the same pass as its feature.
+
+    ``snapshot(fs, done, total)``, when given, is called during extraction
+    with the features read so far — about every ``snapshot_interval``
+    seconds, the first time sooner — so a caller can show provisional groups
+    of a long scan. It runs on the scanning thread; the workers go on reading
+    meanwhile. When it takes long, the next one waits longer (ten times its
+    duration at least), so grouping never takes over the scan.
     """
     if isinstance(extractor, str):
         extractor = get_extractor(extractor, **(params or {}))
@@ -67,13 +76,33 @@ def extract_features(
         raise ValueError("pass params only with an extractor name")
     owned, cache_obj = _open_cache(cache)
     try:
-        return _extract(items, extractor, references, cache_obj, include_remote, workers, remote_workers, progress, cancel)
+        return _extract(items, extractor, references, cache_obj, include_remote, workers, remote_workers, progress, cancel,
+                        snapshot, snapshot_interval)
     finally:
         if owned:
             cache_obj.close()
 
 
-def _extract(items, extractor, references, cache, include_remote, workers, remote_workers, progress, cancel):
+#: The first snapshot comes at most this many seconds into extraction.
+_FIRST_SNAPSHOT = 60.0
+
+
+def _assemble(fs: FeatureSet, todo, found) -> FeatureSet:
+    for i, (item, is_ref) in enumerate(todo):
+        data = found.get(i)
+        if data is None:
+            continue
+        if is_ref:
+            fs.references.append(item)
+            fs.reference_features.append(data)
+        else:
+            fs.items.append(item)
+            fs.features.append(data)
+    return fs
+
+
+def _extract(items, extractor, references, cache, include_remote, workers, remote_workers, progress, cancel,
+             snapshot=None, snapshot_interval=300.0):
     fs = FeatureSet(extractor=extractor)
     result = fs.result
     key = extractor.feature_key
@@ -193,6 +222,18 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
             new_features.clear()
             last_flush = time.monotonic()
 
+    next_snapshot = time.monotonic() + min(_FIRST_SNAPSHOT, snapshot_interval)
+    finished = 0
+
+    def maybe_snapshot() -> None:
+        nonlocal next_snapshot
+        if snapshot is None or time.monotonic() < next_snapshot:
+            return
+        t0 = time.monotonic()
+        snapshot(_assemble(FeatureSet(extractor=extractor), todo, dict(found)), finished, len(misses))
+        took = time.monotonic() - t0
+        next_snapshot = time.monotonic() + max(snapshot_interval, 10 * took)
+
     with Runner(workers=workers, remote_workers=remote_workers, progress=progress, cancel=cancel) as runner:
         runner.start_phase("extract", len(misses))
         futures = {runner.submit(todo[i][0].is_remote, work, todo[i][0], runner.stop, runner.note): i for i in misses}
@@ -214,23 +255,15 @@ def _extract(items, extractor, references, cache, include_remote, workers, remot
                 result.unreadable += 1
             else:
                 found[i] = data
+            finished += 1
             flush()
+            maybe_snapshot()
         result.cancelled = runner.stop.is_set()
         # Everything finished so far is valid, cancelled or not.
         flush(force=True)
         cache.touch(features=touched)
 
-    for i, (item, is_ref) in enumerate(todo):
-        data = found.get(i)
-        if data is None:
-            continue
-        if is_ref:
-            fs.references.append(item)
-            fs.reference_features.append(data)
-        else:
-            fs.items.append(item)
-            fs.features.append(data)
-    return fs
+    return _assemble(fs, todo, found)
 
 
 def group_features(
@@ -311,8 +344,27 @@ def find_similar(
     remote_workers: Optional[int] = None,
     progress: Optional[ProgressCallback] = None,
     cancel: Optional[CancelCheck] = None,
+    on_snapshot: Optional[Callable[[list[Group], int, int], None]] = None,
+    snapshot_interval: float = 300.0,
 ) -> ScanResult:
-    """Extract features and group them in one call. See :func:`extract_features` and :func:`group_features`."""
+    """Extract features and group them in one call. See :func:`extract_features` and :func:`group_features`.
+
+    ``on_snapshot(groups, done, total)`` receives **provisional** groups during
+    extraction, grouped from the features read so far (see
+    ``extract_features``'s ``snapshot``). They are not a part of the final
+    result: a file read later can join a group, or become the anchor of a new
+    one that takes members from it.
+    """
+    snapshot = None
+    if on_snapshot is not None:
+        def snapshot(partial: FeatureSet, done: int, total: int) -> None:
+            # A cancelled grouping returns no groups; that is not a snapshot.
+            if cancel is not None and cancel():
+                return
+            groups = group_features(partial, threshold, cancel=cancel)
+            if cancel is None or not cancel():
+                on_snapshot(groups, done, total)
+
     fs = extract_features(
         items,
         extractor,
@@ -324,6 +376,8 @@ def find_similar(
         remote_workers=remote_workers,
         progress=progress,
         cancel=cancel,
+        snapshot=snapshot,
+        snapshot_interval=snapshot_interval,
     )
     result = fs.result
     if not result.cancelled:
