@@ -60,6 +60,22 @@ Two guarantees:
   your user cache folder, so a second scan is fast. You can delete that cache
   at any time.
 
+## Watching a scan from another program
+
+A long scan does not need anyone to stay attached to it. Start it with
+`--status FILE`, and it keeps its progress in that file as JSON (replaced
+whole each time, and rewritten every few seconds while it runs). Create the
+file named by `--stop-file FILE` to stop it the way Ctrl-C does: the groups
+found so far are still written.
+
+```bash
+similar-files scan ~/Movies --out ~/groups -m video \
+    --status ~/scan/status.json --stop-file ~/scan/stop
+```
+
+XeFM starts scans this way, so they keep running after you close it. See
+[doc/STATUS_FORMAT.md](https://github.com/crftwr/similar-files/blob/main/doc/STATUS_FORMAT.md).
+
 ## Using it from Python
 
 The command line is a thin wrapper. The scanning, caching and grouping are a

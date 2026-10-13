@@ -107,3 +107,61 @@ def test_each_file_gets_a_line_and_a_rerun_says_cached(tree, capsys):
 def test_quiet_prints_no_progress(tree, capsys):
     assert run(tree, "--quiet") == 0
     assert capsys.readouterr().out == ""
+
+
+def test_status_file_records_the_scan(tree):
+    from similar_files.status import read_status
+
+    status = tree / "status.json"
+    assert run(tree, "--status", str(status), "-q") == 0
+    data = read_status(status)
+    assert data["state"] == "done"
+    assert data["exit_code"] == 0
+    assert data["groups"] == 1 and data["members"] == 1
+    assert data["pid"] == os.getpid()
+    assert data["updated"] >= data["started"]
+    assert data["out"] == str(tree / "out")
+
+
+def test_status_file_says_failed_when_the_options_are_wrong(tree):
+    from similar_files.status import read_status
+
+    status = tree / "status.json"
+    assert run(tree, "--status", str(status), "--method", "no-such") == 2
+    assert read_status(status)["state"] == "failed"
+
+
+def test_stop_file_cancels_and_writes_what_was_found(tree):
+    from similar_files.status import read_status
+
+    stop = tree / "stop"
+    stop.write_text("")
+    status = tree / "status.json"
+    assert run(tree, "--status", str(status), "--stop-file", str(stop), "-q") == 130
+    assert read_status(status)["state"] == "cancelled"
+
+
+def test_status_heartbeat_and_atomic_write(tmp_path):
+    import time
+
+    from similar_files.model import Progress
+    from similar_files.status import StatusFile, read_status
+
+    path = tmp_path / "s.json"
+    status = StatusFile(path, out=tmp_path, heartbeat=0.05, min_interval=10).start()
+    first = read_status(path)["updated"]
+    time.sleep(0.2)
+    assert read_status(path)["updated"] > first     # beats with no progress
+    status.update(Progress("hash", 3, 10))          # a new phase writes at once
+    assert read_status(path)["phase"] == "hash"
+    status.finish("done", 0, groups=2, members=5)
+    assert read_status(path)["state"] == "done"
+    assert not (tmp_path / "s.json.tmp").exists()
+
+
+def test_read_status_of_nothing(tmp_path):
+    from similar_files.status import read_status
+
+    assert read_status(tmp_path / "missing.json") is None
+    (tmp_path / "bad.json").write_text("{")
+    assert read_status(tmp_path / "bad.json") is None

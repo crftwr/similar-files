@@ -20,6 +20,7 @@ from .playlist import our_playlists, write_playlists
 from .registry import ExtractorUnavailable, extractors, get_extractor
 from .similar import find_similar
 from .source import LocalFile, WalkStats, walk
+from .status import CANCELLED, DONE, FAILED, StatusFile, StopFile
 
 logger = logging.getLogger("similar_files")
 
@@ -79,6 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="extract features of remote files too (downloads them)",
     )
     scan.add_argument("--min-size", type=int, default=1, metavar="BYTES", help="ignore smaller files (default 1)")
+    scan.add_argument(
+        "--status", metavar="FILE",
+        help="keep the scan's progress in FILE as JSON, for a program watching from outside",
+    )
+    scan.add_argument(
+        "--stop-file", metavar="FILE",
+        help="stop the scan as Ctrl-C does once FILE exists (the groups found so far are written)",
+    )
     scan.add_argument(
         "--replace", action="store_true",
         help="remove playlists an earlier run wrote in --out before writing new ones",
@@ -175,6 +184,22 @@ def _stdout_to_devnull() -> None:
 
 
 def _cmd_scan(args: argparse.Namespace) -> int:
+    """``scan``, with its status file (``--status``) kept from the first
+    moment to the last — a scan that fails on its options says so there too,
+    or a watcher would wait for it forever."""
+    status = StatusFile(args.status, out=Path(args.out).expanduser()).start() if args.status else None
+    summary: dict = {}
+    code = 2
+    try:
+        code = _scan(args, status, summary)
+        return code
+    finally:
+        if status is not None:
+            state = CANCELLED if code == 130 else DONE if code in (0, 1) else FAILED
+            status.finish(state, code, **summary)
+
+
+def _scan(args: argparse.Namespace, status: Optional[StatusFile], summary: dict) -> int:
     out = Path(args.out).expanduser()
     if out.exists() and not out.is_dir():
         logger.error("--out %s is not a folder", out)
@@ -212,14 +237,25 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         signal.signal(signal.SIGINT, signal.default_int_handler)
 
     previous = signal.signal(signal.SIGINT, on_sigint)
-    progress = _ProgressLog(not args.quiet)
+    log = _ProgressLog(not args.quiet)
+    if status is None:
+        progress = log
+    else:
+        def progress(p: Progress) -> None:
+            log(p)
+            status.update(p)
+    stop_file = StopFile(args.stop_file) if args.stop_file else None
+
+    def cancelled() -> bool:
+        return stop.is_set() or (stop_file is not None and stop_file())
+
     stats = WalkStats()
     items = walk(
         args.roots,
         follow_symlinks=args.follow_symlinks,
         remote_roots=args.remote_root,
         stats=stats,
-        cancel=stop.is_set,
+        cancel=cancelled,
     )
     try:
         cache = False if args.no_cache else Cache(args.cache)
@@ -229,7 +265,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
     try:
         common = dict(
             references=references, cache=cache, workers=args.workers, remote_workers=args.remote_workers,
-            progress=progress, cancel=stop.is_set,
+            progress=progress, cancel=cancelled,
         )
         if extractor is None:
             result = find_identical(items, min_size=args.min_size, **common)
@@ -244,6 +280,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
             cache.close()
 
     written = write_playlists(result.groups, out, replace=args.replace)
+    summary.update(groups=len(written), members=sum(len(g.members) for g in result.groups))
 
     if stats.hardlink_aliases:
         logger.info("%d hard link(s) counted once", stats.hardlink_aliases)
