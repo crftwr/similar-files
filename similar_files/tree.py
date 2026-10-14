@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from . import __version__
+from ._replace import replace
 from .model import Group
 from .playlist import _basename, playlist_name
 
@@ -107,7 +108,7 @@ def write(path: str | os.PathLike, document: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(document, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    os.replace(tmp, path)
+    replace(tmp, path)
     return path
 
 
