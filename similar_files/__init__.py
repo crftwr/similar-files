@@ -19,7 +19,7 @@ from .registry import (
 from .similar import FeatureSet, extract_features, find_similar, group_features
 from .source import FileItem, LocalFile, WalkStats, walk
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "Cache",
