@@ -1,4 +1,4 @@
-"""Groups as one ``.xefml`` tree file — XeFM's format for a tree of references.
+"""Groups as one ``.xft`` tree file — XeFM's format for a tree of references.
 
 The other output, beside a folder of ``.m3u8`` playlists (:mod:`.playlist`).
 One file holds every group: a group is a node whose children are the files,
@@ -6,7 +6,7 @@ each a reference to a place with the attributes recorded when it was read
 (size, modification time) and the similarity to its anchor. XeFM browses it
 the way it browses an archive.
 
-The format is XeFM's and its specification lives there (``doc/XEFML_FORMAT.md``
+The format is XeFM's and its specification lives there (``doc/XFT_FORMAT.md``
 in the XeFM repository, discussion xefm#549). This module only writes it; it
 imports nothing from XeFM.
 
@@ -31,9 +31,9 @@ from . import __version__
 from .model import Group
 from .playlist import _basename, playlist_name
 
-FORMAT = "xefml"
+FORMAT = "xft"
 VERSION = 1
-SUFFIX = ".xefml"
+SUFFIX = ".xft"
 
 
 def _unique(name: str, taken: set[str]) -> str:

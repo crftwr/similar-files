@@ -73,7 +73,7 @@ similar-files scan ~/Movies --out ~/groups -m video \
     --status ~/scan/status.json --stop-file ~/scan/stop
 ```
 
-Add `--format tree` and `--out` names one `.xefml` file instead of a folder.
+Add `--format tree` and `--out` names one `.xft` file instead of a folder.
 It holds every group, and it is rewritten every few minutes while the scan
 runs, so you can start looking before the scan ends. Those intermediate
 groups are provisional: a file read later can still join one, or start a

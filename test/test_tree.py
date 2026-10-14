@@ -1,4 +1,4 @@
-"""The .xefml tree output: snapshots, names, and a stopped scan's last write."""
+"""The .xft tree output: snapshots, names, and a stopped scan's last write."""
 
 from similar_files.model import Group, Member
 from similar_files.tree import TreeWriter, read, render
@@ -21,7 +21,7 @@ def test_same_names_are_told_apart():
 
 
 def test_snapshots_count_generations_and_stay_provisional(tmp_path):
-    path = tmp_path / "r.xefml"
+    path = tmp_path / "r.xft"
     w = TreeWriter(path, title="t")
     w.snapshot([_group("/a.mp4", "/b.mp4")], done=3, total=10)
     doc = read(path)
@@ -32,11 +32,11 @@ def test_snapshots_count_generations_and_stay_provisional(tmp_path):
     w.finish([_group("/a.mp4", "/b.mp4", "/c.mp4")], done=10, total=10)
     doc = read(path)
     assert (doc["final"], doc["complete"], doc["generation"]) == (True, True, 3)
-    assert not (tmp_path / "r.xefml.tmp").exists()
+    assert not (tmp_path / "r.xft.tmp").exists()
 
 
 def test_a_stopped_scan_keeps_its_last_snapshot(tmp_path):
-    path = tmp_path / "r.xefml"
+    path = tmp_path / "r.xft"
     w = TreeWriter(path, title="t")
     w.snapshot([_group("/a.mp4", "/b.mp4")], done=4, total=10)
     w.finish([], complete=False)
