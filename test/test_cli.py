@@ -170,7 +170,7 @@ def test_read_status_of_nothing(tmp_path):
 def test_tree_format_writes_one_file(tree):
     from similar_files.tree import read as read_tree
 
-    out = tree / "result.xefml"
+    out = tree / "result.xft"
     assert main(["scan", str(tree / "in"), "--out", str(out), "--cache", str(tree / "c.db"),
                  "--format", "tree", "-q"]) == 0
     doc = read_tree(out)

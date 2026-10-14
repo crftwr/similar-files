@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument(
         "--format", choices=["m3u8", "tree"], default="m3u8",
         help="m3u8: one playlist per group in the --out folder (default); "
-             "tree: every group in one .xefml file named by --out, rewritten as the scan goes",
+             "tree: every group in one .xft file named by --out, rewritten as the scan goes",
     )
     scan.add_argument(
         "--snapshot-interval", type=float, default=300.0, metavar="SECONDS",
@@ -214,7 +214,7 @@ def _scan(args: argparse.Namespace, status: Optional[StatusFile], summary: dict)
     as_tree = args.format == "tree"
     if as_tree:
         if out.is_dir():
-            logger.error("--out %s is a folder; with --format tree it names the .xefml file", out)
+            logger.error("--out %s is a folder; with --format tree it names the .xft file", out)
             return 2
         if out.exists() and not args.replace:
             logger.error("%s already exists; pass --replace to overwrite it", out)
