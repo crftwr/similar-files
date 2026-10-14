@@ -42,6 +42,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from ._replace import replace
 from .model import Progress
 
 VERSION = 1
@@ -125,7 +126,7 @@ class StatusFile:
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
                 tmp.write_text(text, encoding="utf-8")
-                os.replace(tmp, self.path)
+                replace(tmp, self.path)
             except OSError:
                 # A status file that cannot be written must not stop the scan;
                 # the watcher sees ``updated`` go stale and says so.
