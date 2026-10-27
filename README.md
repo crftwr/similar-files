@@ -15,7 +15,8 @@ playlist you can open anywhere.
 - **Similar videos**: the same video re-encoded, resized or re-muxed, and
   clips cut out of a longer video. Needs [ffmpeg](https://ffmpeg.org) on your
   `PATH`.
-- **Similar audio**: the same recording re-encoded, or with its tags changed.
+- **Similar audio**: the same recording re-encoded or re-tagged, an excerpt
+  and the recording it was cut from, a track inside a longer mix.
   Needs `fpcalc` from [Chromaprint](https://acoustid.org/chromaprint) on your
   `PATH` (`brew install chromaprint`, `apt install libchromaprint-tools`).
 

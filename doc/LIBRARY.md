@@ -35,11 +35,13 @@ default.
 |---|---|---|---|
 | `image` | Pillow: `pip install "similar-files[image]"` (`whash` also needs `[whash]`) | 0.8 | `algorithm` (`phash`, `dhash`, `ahash`, `whash`), `hash_size` (8) |
 | `video` | `ffmpeg` on `PATH` | 0.7 | `interval` in seconds (1.0) |
-| `audio` | `fpcalc` (Chromaprint) on `PATH` | 0.7 | `length` in seconds (120) |
+| `audio` | `fpcalc` (Chromaprint) on `PATH` | 0.7 | `length` in seconds (0: the whole file) |
 
 A video's similarity is the share of the shorter video found in the other,
 so a clip groups with the video it was cut from; see
-[dev/VIDEO_SIMILARITY.md](dev/VIDEO_SIMILARITY.md).
+[dev/VIDEO_SIMILARITY.md](dev/VIDEO_SIMILARITY.md). Audio is measured the
+same way, so an excerpt groups with its recording and a track with a mix
+that contains it; see [dev/AUDIO_SIMILARITY.md](dev/AUDIO_SIMILARITY.md).
 
 `sf.extractors()` lists them all, with `is_available()` and
 `install_hint()` on each class.
