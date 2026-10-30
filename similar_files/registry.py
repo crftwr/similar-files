@@ -103,9 +103,36 @@ class Extractor:
         """Raise ``ValueError`` for parameter values the extractor cannot use."""
 
     @classmethod
+    def check_programs(cls) -> Optional[str]:
+        """Why the programs in :attr:`requires_programs` found on ``PATH`` cannot be used, or ``None``.
+
+        Called only when every one of them is on ``PATH``, at most once per
+        process for the same program paths. An extractor overrides it to run
+        its programs once on generated input, so a program too old for the
+        options the extractor passes makes it unavailable, instead of failing
+        on every file and caching each one as unreadable.
+        """
+        return None
+
+    @classmethod
+    def _program_problem(cls) -> Optional[str]:
+        found = tuple(shutil.which(p) for p in cls.requires_programs)
+        if None in found:
+            return None
+        key = (cls, found)
+        with _checks_lock:
+            if key not in _checks:
+                _checks[key] = cls.check_programs()
+                if _checks[key]:
+                    logger.warning("extractor %r is unavailable: %s", cls.name, _checks[key])
+            return _checks[key]
+
+    @classmethod
     def is_available(cls) -> bool:
-        return all(importlib.util.find_spec(m) is not None for m in cls.requires) and all(
-            shutil.which(p) is not None for p in cls.requires_programs
+        return (
+            all(importlib.util.find_spec(m) is not None for m in cls.requires)
+            and all(shutil.which(p) is not None for p in cls.requires_programs)
+            and cls._program_problem() is None
         )
 
     @classmethod
@@ -116,6 +143,10 @@ class Extractor:
         missing = [p for p in cls.requires_programs if shutil.which(p) is None]
         if missing:
             hints.append("put " + ", ".join(missing) + " on PATH")
+        else:
+            problem = cls._program_problem()
+            if problem:
+                hints.append(problem)
         return "; ".join(hints) or "available"
 
     @property
@@ -179,6 +210,9 @@ def coerce_param(value: Any, kind: type) -> Any:
 
 
 _REGISTRY: dict[str, type[Extractor]] = {}
+#: The result of :meth:`Extractor.check_programs`, by class and program paths.
+_checks: dict[tuple[type[Extractor], tuple[Optional[str], ...]], Optional[str]] = {}
+_checks_lock = threading.Lock()
 _builtins_loaded = False
 
 

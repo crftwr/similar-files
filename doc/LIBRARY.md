@@ -155,4 +155,10 @@ For speed over many files, override `prepare()` and `similarities()`.
 An extractor that runs an external program sets `needs_path = True` and
 implements `extract_file(path) -> bytes` instead of `extract`, and lists
 the programs in `requires_programs`. `path` is the item's `local_path`, or a
-temporary copy of a remote item; never write to it.
+temporary copy of a remote item; never write to it. If the programs found
+on `PATH` may be too old or built without what it needs, it also overrides
+the class method `check_programs() -> str | None`: run them once on
+generated input, and return what is wrong, or `None`. It runs once per
+process, and a problem makes the extractor unavailable, with that text as
+its `install_hint()`, instead of failing on every file and caching each one
+as unreadable.

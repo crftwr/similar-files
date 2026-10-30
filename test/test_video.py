@@ -183,3 +183,22 @@ def test_a_frame_many_videos_share_does_not_make_them_similar():
     sims = ex.similarities(ex.prepare(fs), fs[0])
     assert sims[-1] == 1.0
     assert max(sims[1:-1]) == 0.0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the fake ffmpeg is a shell script")
+def test_an_ffmpeg_too_old_for_the_options_makes_video_unavailable(tmp_path, monkeypatch):
+    # The ffmpeg of a NAS can predate -fps_mode (5.1). Without this check,
+    # every video would fail and be cached as unreadable.
+    from similar_files.registry import ExtractorUnavailable
+    from similar_files.video import VideoExtractor
+
+    fake = tmp_path / "ffmpeg"
+    fake.write_text("#!/bin/sh\ncat >/dev/null\necho \"Unrecognized option 'fps_mode'.\" >&2\nexit 8\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    assert not VideoExtractor.is_available()
+    assert "fps_mode" in VideoExtractor.install_hint()
+    with pytest.raises(ExtractorUnavailable, match="5.1 or later"):
+        get_extractor("video")
+    monkeypatch.undo()
+    assert VideoExtractor.is_available()

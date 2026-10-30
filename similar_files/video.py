@@ -13,7 +13,9 @@ from __future__ import annotations
 import bisect
 import logging
 import re
+import shutil
 import struct
+import subprocess
 from collections import defaultdict
 from typing import Any, NamedTuple, Sequence
 
@@ -56,8 +58,21 @@ _FRAME = struct.Struct("<fQ")
 #: Seconds an ffmpeg run may take before the file counts as unreadable. It
 #: reads the whole file, which on a network mount takes a while.
 _TIMEOUT = 600
+#: Seconds the check of ffmpeg may take, on a few tiny frames.
+_CHECK_TIMEOUT = 30
 _DURATION = re.compile(rb"Duration: (\d+):(\d+):([\d.]+), start: (-?[\d.]+)")
 _PTS_TIME = re.compile(rb"^\[Parsed_showinfo[^\]]*\].*?\bpts_time:\s*(\S+)", re.MULTILINE)
+
+
+def _ffmpeg_args(input_args: Sequence[str], interval: float) -> list[str]:
+    """The ffmpeg command line that extracts keyframes from ``input_args``, for a scan and for its check."""
+    select = f"select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{interval})'"
+    return [
+        "ffmpeg", "-hide_banner", "-nostats", "-v", "info", "-nostdin",
+        "-skip_frame", "nokey", *input_args, "-map", "0:v:0", "-an", "-sn", "-dn",
+        "-vf", f"{select},scale={_W}:{_H}:flags=area,format=gray,showinfo",
+        "-fps_mode", "passthrough", "-f", "rawvideo", "-",
+    ]
 
 
 class _Video(NamedTuple):
@@ -122,14 +137,27 @@ class VideoExtractor(Extractor):
         if not 0.1 <= params["interval"] <= 60:
             raise ValueError("interval must be 0.1–60 seconds")
 
+    @classmethod
+    def check_programs(cls) -> str | None:
+        # Three 16×16 grey frames, piped in as raw video, through the same
+        # options and filters a scan uses. An ffmpeg older than 5.1 has no
+        # -fps_mode, and one built without these filters cannot run them:
+        # either would otherwise fail on every video.
+        frames = bytes((x * 16 + y * 3 + f * 50) % 256 for f in range(3) for y in range(16) for x in range(16))
+        args = _ffmpeg_args(
+            ["-f", "rawvideo", "-pix_fmt", "gray", "-video_size", "16x16", "-framerate", "1", "-i", "pipe:0"], 1.0,
+        )
+        try:
+            proc = subprocess.run(args, input=frames, capture_output=True, timeout=_CHECK_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return f"ffmpeg could not be checked: {exc}"
+        if proc.returncode != 0 or len(proc.stdout) != 3 * _FRAME_BYTES or len(_PTS_TIME.findall(proc.stderr)) != 3:
+            error = _error_line(proc.stderr) or f"exit status {proc.returncode}"
+            return f"the ffmpeg on PATH ({shutil.which('ffmpeg')}) cannot run the options video needs ({error}); put ffmpeg 5.1 or later first on PATH"
+        return None
+
     def extract_file(self, path: str) -> bytes:
-        select = f"select='isnan(prev_selected_t)+gte(t-prev_selected_t\\,{self.params['interval']})'"
-        proc = run_program([
-            "ffmpeg", "-hide_banner", "-nostats", "-v", "info", "-nostdin",
-            "-skip_frame", "nokey", "-i", path, "-map", "0:v:0", "-an", "-sn", "-dn",
-            "-vf", f"{select},scale={_W}:{_H}:flags=area,format=gray,showinfo",
-            "-fps_mode", "passthrough", "-f", "rawvideo", "-",
-        ], timeout=_TIMEOUT)
+        proc = run_program(_ffmpeg_args(["-i", path], self.params["interval"]), timeout=_TIMEOUT)
         if proc.returncode != 0:
             raise ExtractionFailed(_error_line(proc.stderr) or f"ffmpeg exited with {proc.returncode}")
         times = _PTS_TIME.findall(proc.stderr)

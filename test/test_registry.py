@@ -75,6 +75,31 @@ def test_a_missing_program_makes_an_extractor_unavailable(monkeypatch):
         registry._REGISTRY.pop("needs-tool", None)
 
 
+def test_a_failed_program_check_makes_an_extractor_unavailable_and_runs_once():
+    from similar_files import registry
+
+    calls = []
+
+    @register
+    class OldTool(Extractor):
+        name = "old-tool"
+        version = 1
+
+        @classmethod
+        def check_programs(cls):
+            calls.append(1)
+            return "the tool is too old"
+
+    try:
+        assert not OldTool.is_available()
+        assert OldTool.install_hint() == "the tool is too old"
+        with pytest.raises(ExtractorUnavailable, match="too old"):
+            get_extractor("old-tool")
+        assert len(calls) == 1
+    finally:
+        registry._REGISTRY.pop("old-tool", None)
+
+
 SLEEP = [sys.executable, "-c", "import time; time.sleep(30)"]
 
 
