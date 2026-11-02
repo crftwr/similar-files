@@ -41,10 +41,11 @@ test:  ## Run the full test suite
 	$(PYTHON) -m pytest test/ -v
 
 .PHONY: test-core
-test-core:  ## Run the tests on a bare install (no optional extras), in a temp venv
+test-core:  ## Run the tests on a bare install (no Pillow, no numpy), in a temp venv
 	rm -rf temp/venv-core
 	python3 -m venv temp/venv-core
-	temp/venv-core/bin/python -m pip install --quiet ".[test]"
+	temp/venv-core/bin/python -m pip install --quiet --no-deps .
+	temp/venv-core/bin/python -m pip install --quiet pytest
 	cd temp && venv-core/bin/python -m pytest ../test/ -v
 
 # --- Scan ----------------------------------------------------------------

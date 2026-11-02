@@ -307,10 +307,21 @@ what to keep" feature may produce a *selection*, never an action.
 
 ## Dependencies
 
-- **Core: standard library only.** Layer 1 must work with a bare
-  `pip install similar-files`.
-- Optional features go in extras: `[image]` for Pillow, `[whash]` for
-  `imagehash` (wavelet hash only), and `numpy` where vector math needs it.
+- **The code runs on the standard library alone.** Every feature that
+  needs a package degrades when it is missing: identical files, video and
+  audio always work, video grouping falls back to pure Python, and the
+  image extractor is unavailable with a hint.
+- **Pillow and numpy are default dependencies, where they have wheels.**
+  `pip install similar-files` installs them on the machines they publish
+  wheels for, chosen by a `platform_machine` marker; elsewhere pip would
+  build them from source and fail, so they are left out. A host like XeFM
+  then needs no extras, and gets fast video grouping without asking.
+  `test/test_dependencies.py` holds the list of machines; update it when
+  Pillow's or numpy's wheels change. (Until 0.4 they were extras only; the
+  user chose this on 2026-11-02.)
+- Other optional packages go in extras: `[whash]` for `imagehash` (wavelet
+  hash only). `[image]` and `[fast]` remain, to ask for Pillow or numpy on a
+  machine the marker leaves out.
   pHash, dHash and aHash are written out in `image.py` on Pillow alone and
   match imagehash bit for bit: imagehash brings numpy, SciPy and PyWavelets
   (about 140 MB), which is too much for a host like XeFM to bundle for one
@@ -419,7 +430,7 @@ seen in a scan's output or the cache.
   original, and that a different image does not.
 - A test that needs an optional dependency skips cleanly when the dependency
   is missing (`pytest.importorskip`). The core suite must pass on a bare
-  install.
+  install: `make test-core` installs the package without its dependencies.
 
 ---
 
