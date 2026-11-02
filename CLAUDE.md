@@ -312,8 +312,10 @@ what to keep" feature may produce a *selection*, never an action.
   audio always work, video grouping falls back to pure Python, and the
   image extractor is unavailable with a hint.
 - **Pillow and numpy are default dependencies, where they have wheels.**
-  `pip install similar-files` installs them on the machines they publish
-  wheels for, chosen by a `platform_machine` marker; elsewhere pip would
+  `pip install similar-files` installs them on the OS and machine pairs they
+  publish wheels for, chosen by a `sys_platform` + `platform_machine`
+  marker (a machine name alone is not enough: Cygwin reports x86_64, FreeBSD
+  arm64); elsewhere pip would
   build them from source and fail, so they are left out. A host like XeFM
   then needs no extras, and gets fast video grouping without asking.
   `test/test_dependencies.py` holds the list of machines; update it when

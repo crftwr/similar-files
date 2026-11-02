@@ -19,7 +19,12 @@ _WITH_WHEELS = [
     ("linux", "x86_64"), ("linux", "aarch64"),
     ("win32", "AMD64"), ("win32", "ARM64"), ("win32", "x86"),
 ]
-_WITHOUT_WHEELS = [("linux", m) for m in ("armv7l", "armv6l", "i686", "ppc64le", "s390x", "riscv64")]
+_WITHOUT_WHEELS = [
+    *[("linux", m) for m in ("armv7l", "armv6l", "i686", "ppc64le", "s390x", "riscv64")],
+    # A machine name with wheels elsewhere, on an OS without them.
+    ("cygwin", "x86_64"), ("msys", "x86_64"), ("freebsd14", "arm64"), ("freebsd14", "amd64"),
+    ("darwin", "aarch64"), ("linux", "AMD64"),
+]
 
 
 def _installed(sys_platform, machine):
