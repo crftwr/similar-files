@@ -127,9 +127,10 @@ The best offset is the median of the matched pairs. At that offset, an
 unmatched frame of the shorter video:
 
 - **counts against** when it falls outside the other video's running time
-  (the other video does not have that part), or when the other video has a
+  (the other video does not have that part), when the other video has a
   keyframe within 0.25 s of it (the same moment, usually a scene cut) and
-  that keyframe differs;
+  that keyframe differs, or when no matched frame is within 30 s of it
+  (nothing in that part of the video agrees);
 - **is left out** otherwise. The other video has no keyframe at that
   moment, so the two cannot be compared.
 
@@ -140,6 +141,30 @@ the other copy happens to have one at the same moment. It is also why a
 clip scores 1 against its source, while a video half made of other footage
 scores about 0.5. That footage is either outside the other's running time,
 or disagrees with its keyframes at the same moments.
+
+#### Why the 30 s reach
+
+The 0.25 s rule alone lets two unrelated videos that open the same way
+(a copyright card, a studio logo, a series' opening) score on that opening.
+Their other keyframes sit at their own scene cuts, which rarely fall within
+0.25 s of the other's, so nearly all of them are left out. In a simulation
+of a 2-minute video opening with five 3-second cards, against a 40-minute
+video opening with the same cards, the average was 0.63, and a 2-minute
+video with a more varied opening crossed 0.7 every time.
+
+Widening 0.25 s does not fix this without costing clips. In the same
+simulation, at ±1 s a clip of mostly fast shots fell from 0.99 to 0.75, and
+at ±3 s a clip against a source with a 10 s GOP fell to 0.77, both just
+above the threshold.
+
+The reach asks something else: whether anything near a frame agrees. In a
+real copy, scene cuts are keyframes in both, so matches come every few
+seconds through the whole video and the reach leaves out what it left out
+before. Clip scores did not change. In footage that agrees with nothing,
+every frame more than 30 s from the shared part counts against: the
+opening case fell to 0.21, and two episodes sharing a 90 s opening and
+ending around 20 different minutes fell from 0.57 to 0.13. Flat frames are not in
+the feature, so a long fade or a dark stretch is no gap.
 
 ### 4. Different keyframe spacing
 
@@ -186,6 +211,7 @@ pair is not affected.
 | match distance | 10 bits | Of 64. |
 | offset tolerance | ±3 s | Covers keyframes a GOP apart. |
 | same moment | 0.25 s | Keyframes this close must agree. |
+| match reach | 30 s | A frame further than this from every match counts against. |
 | minimum matches | 3 | |
 | flat range | 12 | Of 255. |
 | same as previous | 3 bits | Drops repeats in static shots. |
@@ -263,3 +289,9 @@ share, 2026-09-27:
 - **Only the best single offset counts.** A re-edit that reorders scenes
   scores its largest piece.
 - **A video that is flat throughout** has no frames, and matches nothing.
+- **More than 30 s with no matching keyframe** in a real copy counts
+  against: a long take of fast motion with no cut (a handheld concert shot,
+  some sport) where the two copies' keyframes never show the same picture.
+  The copy scores lower by that stretch's share.
+- **A short video that is mostly a shared opening** (15 s of cards in a
+  30 s video) is half the same as the other, and scores like it.

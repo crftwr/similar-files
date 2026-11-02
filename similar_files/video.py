@@ -46,6 +46,11 @@ _OFFSET_TOLERANCE = 3.0
 #: Two keyframes this many seconds apart, once aligned, show the same moment
 #: (a scene cut, where every encoder puts a keyframe) and must match.
 _SAME_MOMENT = 0.25
+#: An unmatched frame further than this many seconds from every matched one
+#: counts against: nothing near it agrees. Without this, two videos sharing
+#: only an opening (a copyright card, a studio logo) score on that opening
+#: alone, because their other keyframes rarely fall at the same moment.
+_MATCH_REACH = 30.0
 #: Fewer aligned frames than this are chance, unless the shorter video has
 #: fewer frames than this in all.
 _MIN_MATCHES = 3
@@ -256,10 +261,11 @@ def _aligned_share(a: _Video, b: _Video, pairs: list[tuple[int, int]]) -> float:
 
     An unmatched frame counts against the similarity when, at that offset,
     it falls outside the other video's running time (the other video does
-    not have that part), or when the other video has a keyframe at nearly
-    the same moment (``_SAME_MOMENT``) and it differs. Otherwise it is left
-    out: the other video's keyframes fall elsewhere, and in a fast shot a
-    second apart is a different picture.
+    not have that part), when the other video has a keyframe at nearly the
+    same moment (``_SAME_MOMENT``) and it differs, or when no matched frame
+    is within ``_MATCH_REACH`` of it (nothing in that part agrees).
+    Otherwise it is left out: the other video's keyframes fall elsewhere,
+    and in a fast shot a second apart is a different picture.
     """
     if (a.end - a.start, len(a.frames)) > (b.end - b.start, len(b.frames)):
         a, b = b, a
@@ -287,9 +293,14 @@ def _aligned_share(a: _Video, b: _Video, pairs: list[tuple[int, int]]) -> float:
     matched = {frame for _, frame in window}
     offset = window[len(window) // 2][0]
     b_times = [t for t, _ in b.frames]
+    matched_times = sorted(a.frames[i][0] for i in matched)
     against = 0
     for i, (t, _) in enumerate(a.frames):
         if i in matched:
+            continue
+        k = bisect.bisect_left(matched_times, t)
+        if all(abs(matched_times[n] - t) > _MATCH_REACH for n in (k - 1, k) if 0 <= n < len(matched_times)):
+            against += 1
             continue
         at = t + offset
         if at < b.start - _SAME_MOMENT or at > b.end + _SAME_MOMENT:

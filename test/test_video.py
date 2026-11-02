@@ -185,6 +185,78 @@ def test_a_frame_many_videos_share_does_not_make_them_similar():
     assert max(sims[1:-1]) == 0.0
 
 
+def _film(seed, seconds):
+    """Shots of 2–15 s; 40% are fast, a new picture every second, the rest one picture each."""
+    import random
+
+    rng = random.Random(seed)
+    shots, t = [], 0.0
+    while t < seconds:
+        length = rng.uniform(2, 15)
+        shots.append((t, min(t + length, seconds), rng.random() < 0.4, rng.getrandbits(64)))
+        t += length
+    return shots
+
+
+def _encode(shots, start, end, gop, phase=0.0):
+    """The feature of ``start``–``end`` of ``shots``, encoded with a keyframe at each cut and every ``gop`` s."""
+    import random
+
+    from similar_files.video import _FRAME, _HEADER
+
+    def picture(t):
+        for s, e, fast, h in shots:
+            if s <= t < e:
+                return random.Random(h + int(t)).getrandbits(64) if fast else h
+
+    times = {start} | {s for s, _, _, _ in shots if start < s < end}
+    t = start + phase
+    while t < end:
+        times.add(t)
+        t += gop
+    frames = [(t - start, picture(t)) for t in sorted(times) if start <= t < end]
+    return _HEADER.pack(0.0, end - start, len(frames)) + b"".join(_FRAME.pack(t, h) for t, h in frames)
+
+
+def test_a_long_clip_from_the_middle_matches_its_source():
+    """An hour cut from 30 min into a 2-hour video, re-encoded with keyframes elsewhere."""
+    ex = get_extractor("video")
+    for seed in range(3):
+        shots = _film(seed, 7200)
+        source = _encode(shots, 0, 7200, 2.0)
+        assert ex.similarity(_encode(shots, 1800.4, 5400.4, 4.17, 0.37), source) > 0.9
+        assert ex.similarity(_encode(shots, 1800.4, 5400.4, 10.0, 0.37), _encode(shots, 0, 7200, 10.0)) > 0.9
+
+
+def test_videos_that_share_only_their_opening_are_not_similar():
+    """A copyright card sequence both open with, then different footage with keyframes at other moments."""
+    ex = get_extractor("video")
+    cards = [(3.0 * k, 3.0 * k + 3, False, 900 + k) for k in range(5)]
+
+    def after_cards(shots):
+        return cards + [(s + 15, e + 15, fast, h) for s, e, fast, h in shots]
+
+    for seed in range(5):
+        short = _encode(after_cards(_film(100 + seed, 105)), 0, 120, 8.0, 0.11)
+        long = _encode(after_cards(_film(200 + seed, 2400)), 0, 2415, 6.0, 0.53)
+        assert ex.similarity(short, long) < 0.5
+
+
+def test_episodes_that_share_their_opening_and_ending_are_not_similar():
+    """The same 90 s opening and ending, around 20 min of different footage."""
+    ex = get_extractor("video")
+    opening, ending = _film(1, 90), _film(2, 90)
+
+    def episode(seed):
+        body = _film(seed, 1200)
+        return (opening + [(s + 90, e + 90, f, h) for s, e, f, h in body]
+                + [(s + 1290, e + 1290, f, h) for s, e, f, h in ending])
+
+    a = _encode(episode(300), 0, 1380, 2.0)
+    b = _encode(episode(301), 0, 1380, 2.0, 0.6)
+    assert ex.similarity(a, b) < 0.5
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the fake ffmpeg is a shell script")
 def test_an_ffmpeg_too_old_for_the_options_makes_video_unavailable(tmp_path, monkeypatch):
     # The ffmpeg of a NAS can predate -fps_mode (5.1). Without this check,
