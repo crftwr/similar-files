@@ -34,7 +34,7 @@ default.
 | Extractor | Needs | Default threshold | Parameters |
 |---|---|---|---|
 | `image` | Pillow: `pip install "similar-files[image]"` (`whash` also needs `[whash]`) | 0.8 | `algorithm` (`phash`, `dhash`, `ahash`, `whash`), `hash_size` (8) |
-| `video` | `ffmpeg` on `PATH` | 0.7 | `interval` in seconds (1.0) |
+| `video` | `ffmpeg` on `PATH`; numpy 2 (`[fast]`) groups large collections faster | 0.7 | `interval` in seconds (1.0) |
 | `audio` | `fpcalc` (Chromaprint) on `PATH` | 0.7 | `length` in seconds (0: the whole file) |
 
 A video's similarity is the share of the shorter video found in the other,

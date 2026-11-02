@@ -16,6 +16,7 @@ import re
 import shutil
 import struct
 import subprocess
+from array import array
 from collections import defaultdict
 from typing import Any, NamedTuple, Sequence
 
@@ -58,6 +59,10 @@ _MIN_MATCHES = 3
 #: what chance puts in one, marks a frame many videos share.
 _COMMON_MIN_VIDEOS = 50
 _COMMON_FACTOR = 8
+#: With numpy (2.0 or later) installed, a collection of at least this many
+#: frames is indexed with it. Below, building numpy arrays costs more than
+#: it saves.
+_NUMPY_MIN_FRAMES = 20_000
 _HEADER = struct.Struct("<ddI")
 _FRAME = struct.Struct("<fQ")
 #: Seconds an ffmpeg run may take before the file counts as unreadable. It
@@ -211,32 +216,134 @@ class VideoExtractor(Extractor):
         if common:
             videos = [_without_common(video, common) for video in videos]
             logger.debug("video: %d band value(s) in more than %d videos are ignored", len(common), limit)
-        index: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)
-        for v, video in enumerate(videos):
-            for j, (_, h) in enumerate(video.frames):
-                for key in _band_keys(h):
-                    index[key].append((v, j))
+        frames = sum(len(video.frames) for video in videos)
+        np = _numpy() if frames >= _NUMPY_MIN_FRAMES else None
+        index = _NumpyIndex(videos, frames, np) if np is not None else _ArrayIndex(videos)
+        if np is not None:
+            how = f"numpy {np.__version__}"
+        elif frames >= _NUMPY_MIN_FRAMES:
+            how = "pure Python (install numpy 2 or similar-files[fast] to group faster)"
+        else:
+            how = "pure Python"
+        # Said once a grouping, where a user can check that numpy is used.
+        logger.log(logging.INFO if frames >= _NUMPY_MIN_FRAMES else logging.DEBUG,
+                   "video: comparing %d videos (%d keyframes) with %s", len(videos), frames, how)
         return videos, index, common
 
     def similarities(self, prepared: Any, query: bytes) -> Sequence[float]:
         videos, index, common = prepared
         q = _without_common(self._decode(query), common)
-        # Every frame pair within _MATCH_DISTANCE, found through the band index.
-        matches: dict[int, list[tuple[int, int]]] = defaultdict(list)
-        for i, (_, h) in enumerate(q.frames):
-            seen = set()
-            for key in _band_keys(h):
-                for vj in index.get(key, ()):
-                    if vj in seen:
-                        continue
-                    seen.add(vj)
-                    v, j = vj
-                    if (h ^ videos[v].frames[j][1]).bit_count() <= _MATCH_DISTANCE:
-                        matches[v].append((i, j))
         sims = [0.0] * len(videos)
-        for v, pairs in matches.items():
+        for v, pairs in index.matches(q.frames).items():
             sims[v] = _aligned_share(q, videos[v], pairs)
         return sims
+
+
+def _numpy() -> Any:
+    """numpy, if it is installed and has ``bitwise_count`` (2.0 or later); otherwise ``None``."""
+    try:
+        import numpy
+    except ImportError:
+        return None
+    return numpy if hasattr(numpy, "bitwise_count") else None
+
+
+def _band_ints(h: int) -> list[int]:
+    """The band keys of ``h`` as ints, ``band << _BAND_BITS | value``."""
+    return [(band << _BAND_BITS) | ((h >> (band * _BAND_BITS)) & _BAND_MASK) for band in range(_BANDS)]
+
+
+def _found_earlier(diff: int, band: int) -> bool:
+    """Whether two hashes ``diff`` apart also share a band before ``band``.
+
+    A frame is listed under each of its bands. Counting a match only under
+    the first band the two hashes share counts it once.
+    """
+    return any(((diff >> (e * _BAND_BITS)) & _BAND_MASK) == 0 for e in range(band))
+
+
+class _ArrayIndex:
+    """Every frame under each of its band values, in plain arrays.
+
+    Per band value, the hashes of the frames that have it, and beside them
+    ``video << 32 | frame``. A dict of lists of tuples, as version 2 first
+    had, took over 9 GB for 15,000 feature-length videos and was 18 times
+    slower than this.
+    """
+
+    def __init__(self, videos: Sequence[_Video]) -> None:
+        hashes: dict[int, array] = defaultdict(lambda: array("Q"))
+        ids: dict[int, array] = defaultdict(lambda: array("Q"))
+        for v, video in enumerate(videos):
+            for j, (_, h) in enumerate(video.frames):
+                for key in _band_ints(h):
+                    hashes[key].append(h)
+                    ids[key].append(v << 32 | j)
+        self._hashes, self._ids = dict(hashes), dict(ids)
+
+    def matches(self, frames: Sequence[tuple[float, int]]) -> dict[int, list[tuple[int, int]]]:
+        """Per video, the ``(query frame, frame)`` pairs within ``_MATCH_DISTANCE``."""
+        matches: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        for i, (_, h) in enumerate(frames):
+            for band, key in enumerate(_band_ints(h)):
+                hashes = self._hashes.get(key)
+                if hashes is None:
+                    continue
+                ids = self._ids[key]
+                for n in [n for n, x in enumerate(hashes) if (h ^ x).bit_count() <= _MATCH_DISTANCE]:
+                    if band and _found_earlier(h ^ hashes[n], band):
+                        continue
+                    w = ids[n]
+                    matches[w >> 32].append((i, w & 0xFFFFFFFF))
+        return matches
+
+
+class _NumpyIndex:
+    """The same index in numpy arrays: every frame's hash and id, sorted by band key.
+
+    The frames under one band key are one slice, compared with the query
+    frame at once. Same matches as ``_ArrayIndex``, about 4 times faster on
+    15,000 feature-length videos.
+    """
+
+    def __init__(self, videos: Sequence[_Video], frames: int, np: Any) -> None:
+        self._np = np
+        hashes = np.fromiter((h for video in videos for _, h in video.frames), dtype=np.uint64, count=frames)
+        ids = np.fromiter((v << 32 | j for v, video in enumerate(videos) for j in range(len(video.frames))),
+                          dtype=np.uint64, count=frames)
+        keys = np.concatenate([
+            np.uint64(band << _BAND_BITS) | ((hashes >> np.uint64(band * _BAND_BITS)) & np.uint64(_BAND_MASK))
+            for band in range(_BANDS)
+        ])
+        order = np.argsort(keys, kind="stable")
+        self._hashes = np.tile(hashes, _BANDS)[order]
+        self._ids = np.tile(ids, _BANDS)[order]
+        self._start = np.searchsorted(keys[order], np.arange((_BANDS << _BAND_BITS) + 1, dtype=np.uint64)).tolist()
+
+    def matches(self, frames: Sequence[tuple[float, int]]) -> dict[int, list[tuple[int, int]]]:
+        """Per video, the ``(query frame, frame)`` pairs within ``_MATCH_DISTANCE``."""
+        np = self._np
+        mask = np.uint64(_BAND_MASK)
+        matches: dict[int, list[tuple[int, int]]] = defaultdict(list)
+        for i, (_, h) in enumerate(frames):
+            q = np.uint64(h)
+            for band, key in enumerate(_band_ints(h)):
+                lo, hi = self._start[key], self._start[key + 1]
+                if lo == hi:
+                    continue
+                diff = self._hashes[lo:hi] ^ q
+                near = np.flatnonzero(np.bitwise_count(diff) <= _MATCH_DISTANCE)
+                if not len(near):
+                    continue
+                if band:
+                    d = diff[near]
+                    earlier = np.zeros(len(near), dtype=bool)
+                    for e in range(band):
+                        earlier |= ((d >> np.uint64(e * _BAND_BITS)) & mask) == 0
+                    near = near[~earlier]
+                for w in self._ids[lo:hi][near].tolist():
+                    matches[w >> 32].append((i, w & 0xFFFFFFFF))
+        return matches
 
 
 def _band_keys(h: int) -> list[tuple[int, int]]:

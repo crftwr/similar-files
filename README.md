@@ -27,6 +27,7 @@ Content-aware matching ("screenshots of receipts") is planned for later.
 ```bash
 pip install similar-files            # identical files only
 pip install "similar-files[image]"   # plus similar images (needs only Pillow)
+pip install "similar-files[fast]"    # numpy: groups thousands of videos several times faster
 
 similar-files scan ~/Pictures --out ~/similar-groups              # identical files
 similar-files scan ~/Pictures --out ~/similar-images -m image     # similar images

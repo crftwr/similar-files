@@ -107,6 +107,24 @@ That finds every pair within 3 bits (pigeonhole), and most within 10. The
 same rule is used for a single pair (`similarity()`) and for a collection
 (`similarities()`), so the two agree.
 
+A frame is listed under each of its 4 band values, so one pair can be found
+up to 4 times. It is counted under the first band the two hashes share,
+which needs no set of pairs already seen.
+
+The index is kept in flat arrays, never in Python objects per frame:
+
+- **Pure Python** (`_ArrayIndex`): per band value, an `array` of the
+  frames' hashes and one of `video << 32 | frame`. The candidates under a
+  band value are checked in one list comprehension.
+- **numpy** (`_NumpyIndex`, used when numpy 2 is installed, the `[fast]`
+  extra, and the collection has at least 20,000 frames): every frame's hash
+  and id in one array per field, sorted by band key, with each key's start.
+  The candidates under a band value are one slice, checked at once with
+  `bitwise_count`.
+
+Both find exactly the same pairs. Below 20,000 frames, building the numpy
+arrays costs more than it saves.
+
 ### 2. The time offset, by a sliding window
 
 Each matching pair `(i, j)` has an offset `time_b[j] - time_a[i]`. With the
@@ -258,9 +276,35 @@ One run may take up to 600 s before it counts as a transient failure.
 The last row took 358 ms a query (6 minutes in all) before common frames
 were left out.
 
-Discovery costs O(N²) in the number of videos, through the index. For more
-than a few thousand long videos, an index over whole videos, or numpy, is
-the next step. Add either only when a real case needs it.
+Discovery costs O(N²) in the number of videos, through the index.
+
+**A real collection**, 2026-11-01: 14,921 feature-length videos (median
+126 min, 1,245 keyframes; 20.9 million in all), Apple silicon, 10 cores.
+Averages of a few random queries, times the number of videos:
+
+| Index | per query | discovery | peak memory |
+|---|---:|---:|---:|
+| Dicts of tuples (until 0.3.2) | 4.49 s | 18.6 h | 9.3 GB |
+| Arrays, pure Python | 0.31 s | 76 min | 4.9 GB |
+| numpy | 0.073 s | 18 min | 7 GB |
+
+`prepare()` takes about 95 s with every index. All three return the same
+similarities.
+
+Real hashes are not uniform. Under a band value, a lookup meets about 800
+frames after common values are left out, 2.5 times what uniform hashes
+would give (2,839 before). One query of 1,400 frames checks 2–3 million
+candidates, and that check is the whole cost: aligning the matches is
+under 5% of it.
+
+Measured and not taken:
+
+- **Leaving out the lookups under common band values**, also for a frame
+  that has only one of them: 40% faster, but some similarities change.
+- **Two stages**, picking the candidate videos first by frames that share
+  two bands (32 bits) and then comparing with those alone: 30 minutes in
+  pure Python, about the same as the first, with a recall that could not
+  be checked on this collection.
 
 ## First look at real videos
 

@@ -257,6 +257,68 @@ def test_episodes_that_share_their_opening_and_ending_are_not_similar():
     assert ex.similarity(a, b) < 0.5
 
 
+def _matching_features(seed, videos=60, frames=120):
+    """Random videos, many sharing frames a few bits apart, so the index has real work."""
+    import random
+
+    from similar_files.video import _FRAME, _HEADER
+
+    rng = random.Random(seed)
+    pool = [rng.getrandbits(64) for _ in range(300)]
+    out = []
+    for _ in range(videos):
+        hashes = []
+        for _ in range(frames):
+            h = rng.choice(pool) if rng.random() < 0.5 else rng.getrandbits(64)
+            for _ in range(rng.randrange(6)):
+                h ^= 1 << rng.randrange(64)
+            hashes.append(h)
+        out.append(_HEADER.pack(0.0, 2.0 * frames, frames) + b"".join(
+            _FRAME.pack(2.0 * i + rng.random(), h) for i, h in enumerate(hashes)))
+    return out
+
+
+def _all_pairs(ex, query, feature):
+    """Every frame pair within the match distance, by brute force: what the index must find."""
+    from similar_files.video import _MATCH_DISTANCE, _aligned_share
+
+    q, v = ex._decode(query), ex._decode(feature)
+    pairs = [(i, j) for i, (_, a) in enumerate(q.frames) for j, (_, b) in enumerate(v.frames)
+             if (a ^ b).bit_count() <= _MATCH_DISTANCE and any(
+                 ((a ^ b) >> (k * 16)) & 0xFFFF == 0 for k in range(4))]
+    return _aligned_share(q, v, pairs) if pairs else 0.0
+
+
+def test_the_index_finds_every_pair_that_shares_a_band(monkeypatch):
+    import similar_files.video as video
+
+    ex = get_extractor("video")
+    fs = _matching_features(3)
+    monkeypatch.setattr(video, "_numpy", lambda: None)
+    prepared = ex.prepare(fs)
+    assert isinstance(prepared[1], video._ArrayIndex)
+    for q in fs[:10]:
+        assert ex.similarities(prepared, q) == [_all_pairs(ex, q, f) for f in fs]
+
+
+def test_numpy_finds_the_same_as_pure_python(monkeypatch):
+    np = pytest.importorskip("numpy")
+    if not hasattr(np, "bitwise_count"):
+        pytest.skip("numpy before 2.0")
+    import similar_files.video as video
+
+    ex = get_extractor("video")
+    fs = _matching_features(4)
+    monkeypatch.setattr(video, "_NUMPY_MIN_FRAMES", 0)
+    with_numpy = ex.prepare(fs)
+    assert isinstance(with_numpy[1], video._NumpyIndex)
+    monkeypatch.setattr(video, "_numpy", lambda: None)
+    without = ex.prepare(fs)
+    assert any(max(s for k, s in enumerate(ex.similarities(without, q)) if k != n) > 0 for n, q in enumerate(fs))
+    for q in fs:
+        assert ex.similarities(with_numpy, q) == ex.similarities(without, q)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="the fake ffmpeg is a shell script")
 def test_an_ffmpeg_too_old_for_the_options_makes_video_unavailable(tmp_path, monkeypatch):
     # The ffmpeg of a NAS can predate -fps_mode (5.1). Without this check,

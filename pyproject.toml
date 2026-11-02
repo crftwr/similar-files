@@ -25,6 +25,8 @@ classifiers = [
 image = ["Pillow>=10"]
 # wHash (wavelets) only; pHash, dHash and aHash need nothing beyond Pillow.
 whash = ["Pillow>=10", "ImageHash>=4.3"]
+# Faster video grouping on large collections; without it, the same results in pure Python.
+fast = ["numpy>=2.0"]
 test = ["pytest"]
 
 [project.scripts]
