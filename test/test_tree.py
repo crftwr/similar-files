@@ -56,3 +56,12 @@ def test_final_groups_are_marked_while_the_scan_runs():
 def test_read_rejects_other_files(tmp_path):
     (tmp_path / "x.json").write_text('{"format": "other", "version": 1}')
     assert read(tmp_path / "x.json") is None
+
+
+def test_similarity_is_declared_and_shown_unless_every_group_is_identical():
+    doc = render([_group("/a.mp4", "/b.mp4")], title="t", final=True, generation=1)
+    assert doc["attributes"] == {"similarity": {
+        "label": "Similarity", "type": "ratio", "show": {"columns": [{"before": "size"}]}}}
+    same = Group(_Item("/a"), [Member(_Item("/b"), 1.0)], "identical")
+    doc = render([same], title="t", final=True, generation=1)
+    assert doc["attributes"] == {"similarity": {"label": "Similarity", "type": "ratio"}}
