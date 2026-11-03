@@ -10,6 +10,10 @@ The format is XeFM's and its specification lives there (``doc/XFT_FORMAT.md``
 in the XeFM repository, discussion xefm#549). This module only writes it; it
 imports nothing from XeFM.
 
+The file declares what it records in ``extra`` beyond the format itself —
+``similarity``, a 0–1 score — with its type and how to show it, so a reader
+needs no knowledge of similar-files to show it as a column and sort by it.
+
 A scan can write the file many times. While it runs the file is a
 **snapshot**: ``final`` is false, and the groups in it may still change —
 for similar files a later file can join a group or become a new anchor. The
@@ -78,6 +82,15 @@ def group_node(group: Group, taken: set[str], *, final: bool = False) -> dict:
     return node
 
 
+def declared_attributes(groups: list[Group]) -> dict:
+    """The ``attributes`` the document declares. Identical files are all
+    ``1.0``, so their similarity is declared but not shown as a column."""
+    similarity = {"label": "Similarity", "type": "ratio"}
+    if not groups or any(g.method != "identical" for g in groups):
+        similarity["show"] = {"columns": [{"before": "size"}]}
+    return {"similarity": similarity}
+
+
 def render(groups: Iterable[Group], *, title: str, final: bool, generation: int,
            done: int = 0, total: int = 0, final_groups: Optional[set] = None,
            complete: bool = True) -> dict:
@@ -86,6 +99,7 @@ def render(groups: Iterable[Group], *, title: str, final: bool, generation: int,
     files, a size bucket at a time); every group is final once ``final`` is.
     ``complete`` is false on the last write of a scan that was stopped
     before it read everything."""
+    groups = list(groups)
     taken: set[str] = set()
     nodes = [group_node(g, taken, final=final or (final_groups is not None and id(g) in final_groups))
              for g in groups]
@@ -98,6 +112,7 @@ def render(groups: Iterable[Group], *, title: str, final: bool, generation: int,
         "generation": generation,
         "written": time.time(),
         "progress": {"done": done, "total": total},
+        "attributes": declared_attributes(groups),
         "nodes": nodes,
     }
 
